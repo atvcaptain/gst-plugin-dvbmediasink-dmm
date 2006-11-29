@@ -35,7 +35,7 @@
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	See the GNU
  * Library General Public License for more details.
  *
  * You should have received a copy of the GNU Library General Public
@@ -62,10 +62,35 @@
 #endif
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <linux/dvb/audio.h>
 #include <fcntl.h>
 
 #include <gst/gst.h>
+
+/* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
+ * Select is used to determine when the fd is ready for use. When the element state is changed,
+ * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
+ * sends a control message, so fdsink wakes up and changes state immediately otherwise
+ * it would stay blocked until it receives some data. */
+
+/* the select call is also performed on the control sockets, that way
+ * we can send special commands to unblock the select call */
+#define CONTROL_STOP						'S'		 /* stop the select call */
+#define CONTROL_SOCKETS(sink)	 sink->control_sock
+#define WRITE_SOCKET(sink)			sink->control_sock[1]
+#define READ_SOCKET(sink)			 sink->control_sock[0]
+
+#define SEND_COMMAND(sink, command)					\
+G_STMT_START {															\
+	unsigned char c; c = command;						 \
+	write (WRITE_SOCKET(sink), &c, 1);				 \
+} G_STMT_END
+
+#define READ_COMMAND(sink, command, res)				\
+G_STMT_START {																 \
+	res = read(READ_SOCKET(sink), &command, 1);	 \
+} G_STMT_END
 
 #include "gstdvbaudiosink.h"
 
@@ -93,7 +118,7 @@ GST_STATIC_PAD_TEMPLATE (
 );
 
 #define DEBUG_INIT(bla) \
-  GST_DEBUG_CATEGORY_INIT (dvbaudiosink_debug, "dvbaudiosink", 0, "dvbaudiosink element");
+	GST_DEBUG_CATEGORY_INIT (dvbaudiosink_debug, "dvbaudiosink", 0, "dvbaudiosink element");
 
 GST_BOILERPLATE_FULL (GstDVBAudioSink, gst_dvbaudiosink, GstBaseSink,
 	GST_TYPE_BASE_SINK, DEBUG_INIT);
@@ -111,7 +136,7 @@ static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
 static gboolean gst_dvbaudiosink_query (GstPad * pad, GstQuery * query);
-
+static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -149,6 +174,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_stop);
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
+	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
 }
 
 /* initialize the new element
@@ -221,20 +247,27 @@ gst_dvbaudiosink_query (GstPad * pad, GstQuery * query)
 	}
 }
 
+static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
+{
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+
+	SEND_COMMAND (self, CONTROL_STOP);
+
+	return TRUE;
+}
+
 static gboolean
 gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 {
-	GstEventType type;
 	GstDVBAudioSink *self;
 	self = GST_DVBAUDIOSINK (sink);
-	switch (type) {
+	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 	case GST_EVENT_FLUSH_STOP:
-		printf("DVB audio sink FLUSH\n");
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		break;
 	default:
-		printf("dvb audio sink: unknown event type %d\n", type); 
+		printf("dvb audio sink: unknown event type %d\n", GST_EVENT_TYPE (event)); 
 		return FALSE;
 	}
 	return TRUE;
@@ -246,11 +279,46 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char pes_header[19];
 	GstDVBAudioSink *self;
 	unsigned int size;
+	fd_set readfds;
+	fd_set writefds;
+	gint retval;
+
 	self = GST_DVBAUDIOSINK (sink);
 	
 	size = GST_BUFFER_SIZE (buffer);
 	
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
+
+	FD_ZERO (&readfds);
+	FD_SET (READ_SOCKET (self), &readfds);
+
+	FD_ZERO (&writefds);
+	FD_SET (self->fd, &writefds);
+
+	do {
+		GST_DEBUG_OBJECT (self, "going into select, have %d bytes to write",
+				size);
+		retval = select (FD_SETSIZE, &readfds, &writefds, NULL, NULL);
+	} while ((retval == -1 && errno == EINTR));
+
+	if (retval == -1)
+		goto select_error;
+
+	if (FD_ISSET (READ_SOCKET (self), &readfds)) {
+		/* read all stop commands */
+		while (TRUE) {
+			gchar command;
+			int res;
+
+			READ_COMMAND (self, command, res);
+			if (res < 0) {
+				GST_LOG_OBJECT (self, "no more commands");
+				/* no more commands */
+				break;
+			}
+		}
+		goto stopped;
+	}
 
 	if (self->fd < 0)
 		return GST_FLOW_OK;
@@ -274,7 +342,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		
 		pes_header[8] = 10;
 		
-		pes_header[9]  = 0x31 | ((pts >> 29) & 0xE);
+		pes_header[9]	= 0x31 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
@@ -302,6 +370,18 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	write(self->fd, GST_BUFFER_DATA (buffer), GST_BUFFER_SIZE (buffer));
 
 	return GST_FLOW_OK;
+select_error:
+	{
+		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
+				("select on file descriptor: %s.", g_strerror (errno)));
+		GST_DEBUG_OBJECT (self, "Error during select");
+		return GST_FLOW_ERROR;
+	}
+stopped:
+	{
+		GST_DEBUG_OBJECT (self, "Select stopped");
+		return GST_FLOW_WRONG_STATE;
+	}
 }
 
 static gboolean
@@ -309,16 +389,33 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self;
 	self = GST_DVBAUDIOSINK (basesink);
-	printf("start\n");
 	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
 	
+	gint control_sock[2];
+
+	if (socketpair (PF_UNIX, SOCK_STREAM, 0, control_sock) < 0)
+		goto socket_pair;
+
+	READ_SOCKET (self) = control_sock[0];
+	WRITE_SOCKET (self) = control_sock[1];
+
+	fcntl (READ_SOCKET (self), F_SETFL, O_NONBLOCK);
+	fcntl (WRITE_SOCKET (self), F_SETFL, O_NONBLOCK);
+
 	if (self->fd)
 	{
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
 		ioctl(self->fd, AUDIO_PLAY);
 	}
 	return TRUE;
+	/* ERRORS */
+socket_pair:
+	{
+		GST_ELEMENT_ERROR (self, RESOURCE, OPEN_READ_WRITE, (NULL),
+				GST_ERROR_SYSTEM);
+		return FALSE;
+	}
 }
 
 static gboolean
@@ -326,7 +423,6 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self;
 	self = GST_DVBAUDIOSINK (basesink);
-	printf("stop\n");
 	if (self->fd >= 0)
 	{
 		ioctl(self->fd, AUDIO_STOP);

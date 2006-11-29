@@ -69,10 +69,12 @@ typedef struct _GstDVBVideoSinkClass GstDVBVideoSinkClass;
 
 struct _GstDVBVideoSink
 {
-  GstBaseSink element;
+	GstBaseSink element;
 
-  gboolean silent;
-  int fd;
+	gint control_sock[2];
+
+	gboolean silent;
+	int fd;
 };
 
 struct _GstDVBVideoSinkClass 

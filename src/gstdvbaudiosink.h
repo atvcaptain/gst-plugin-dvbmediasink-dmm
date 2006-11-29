@@ -69,15 +69,17 @@ typedef struct _GstDVBAudioSinkClass GstDVBAudioSinkClass;
 
 struct _GstDVBAudioSink
 {
-  GstBaseSink element;
+	GstBaseSink element;
 
-  gboolean silent;
-  int fd;
+	gint control_sock[2];
+
+	gboolean silent;
+	int fd;
 };
 
 struct _GstDVBAudioSinkClass 
 {
-  GstBaseSinkClass parent_class;
+	GstBaseSinkClass parent_class;
 };
 
 GType gst_gst_dvbaudiosink_get_type (void);
