@@ -61,6 +61,7 @@
 #include <config.h>
 #endif
 #include <unistd.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <linux/dvb/audio.h>
@@ -114,7 +115,8 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("audio/mpeg, "
-		"mpegversion = (int) [ 1, 2 ]")
+		"mpegversion = (int) [ 1, 2 ]; "
+		"audio/x-private1-ac3")
 );
 
 #define DEBUG_INIT(bla) \
@@ -137,6 +139,7 @@ static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
 static gboolean gst_dvbaudiosink_query (GstPad * pad, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
+static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -175,6 +178,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
+	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 }
 
 /* initialize the new element
@@ -193,6 +197,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass,
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbaudiosink_query));
 	
 	klass->silent = FALSE;
+	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
 static void
@@ -256,14 +261,54 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 	return TRUE;
 }
 
+static gboolean 
+gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
+{
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+
+	GstStructure *structure;
+	const char *type;
+	int bypass;
+	
+	if (self->fd < 0)
+		return FALSE;
+	
+	structure = gst_caps_get_structure (caps, 0);	
+	type = gst_structure_get_name (structure);
+
+	self->skip = 0;
+
+	if (!strcmp(type, "audio/mpeg"))
+		bypass = 1;
+	else if (!strcmp(type, "audio/x-ac3") || !strcmp(type, "audio/ac3"))
+		bypass = 0;		
+	else if (!strcmp(type, "audio/x-private1-ac3"))
+	{
+		bypass = 0;
+		self->skip = 2;
+	} else
+	{
+		GST_DEBUG_OBJECT(self, "illegal streamtype %s!\n", type);
+		return FALSE;
+	}
+
+	GST_DEBUG_OBJECT(self, "setting dvb mode %d\n", bypass);
+	ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass);
+
+	return TRUE;
+}
+
 static gboolean
 gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 {
 	GstDVBAudioSink *self;
+	GST_DEBUG_OBJECT (self, "EVENT %s", gst_event_type_get_name(GST_EVENT_TYPE (event)));
+
 	self = GST_DVBAUDIOSINK (sink);
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 	case GST_EVENT_FLUSH_STOP:
+		GST_DEBUG_OBJECT (self, "AUDIO_CLEAR_BUFFER");
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		break;
 	default:
@@ -282,10 +327,12 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	fd_set readfds;
 	fd_set writefds;
 	gint retval;
-
-	self = GST_DVBAUDIOSINK (sink);
 	
-	size = GST_BUFFER_SIZE (buffer);
+	self = GST_DVBAUDIOSINK (sink);
+
+	int skip = self->skip;
+	
+	size = GST_BUFFER_SIZE (buffer) - skip;
 	
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
 
@@ -367,7 +414,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	}
 #endif
 
-	write(self->fd, GST_BUFFER_DATA (buffer), GST_BUFFER_SIZE (buffer));
+	write(self->fd, GST_BUFFER_DATA (buffer) + skip, GST_BUFFER_SIZE (buffer) - skip);
 
 	return GST_FLOW_OK;
 select_error:
@@ -380,6 +427,7 @@ select_error:
 stopped:
 	{
 		GST_DEBUG_OBJECT (self, "Select stopped");
+		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		return GST_FLOW_WRONG_STATE;
 	}
 }
@@ -407,6 +455,7 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 	{
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
 		ioctl(self->fd, AUDIO_PLAY);
+		ioctl(self->fd, AUDIO_SET_BYPASS_MODE, 0);
 	}
 	return TRUE;
 	/* ERRORS */
