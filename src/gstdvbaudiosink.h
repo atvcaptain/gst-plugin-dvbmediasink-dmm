@@ -75,6 +75,7 @@ struct _GstDVBAudioSink
 
 	gboolean silent;
 	int fd;
+	int skip;
 };
 
 struct _GstDVBAudioSinkClass 
