@@ -307,15 +307,23 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	self = GST_DVBAUDIOSINK (sink);
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
-	case GST_EVENT_FLUSH_STOP:
-		GST_DEBUG_OBJECT (self, "AUDIO_CLEAR_BUFFER");
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		break;
+	case GST_EVENT_FLUSH_STOP:
+		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+		while (1)
+		{
+			gchar command;
+			int res;
+
+			READ_COMMAND (self, command, res);
+			if (res < 0)
+				break;
+		}
+		break;
 	default:
-		printf("dvb audio sink: unknown event type %d\n", GST_EVENT_TYPE (event)); 
-		return FALSE;
+		return TRUE;
 	}
-	return TRUE;
 }
 
 static GstFlowReturn

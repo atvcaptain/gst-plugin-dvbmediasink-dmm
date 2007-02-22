@@ -70,6 +70,10 @@
 
 #include "gstdvbvideosink.h"
 
+#ifndef VIDEO_GET_PTS
+#define VIDEO_GET_PTS              _IOR('o', 57, gint64)
+#endif
+
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Select is used to determine when the fd is ready for use. When the element state is changed,
  * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
@@ -194,7 +198,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	
 	klass->silent = FALSE;
 	
-	GST_BASE_SINK (klass)->sync = TRUE;
+	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
 static void
@@ -242,8 +246,29 @@ gst_dvbvideosink_query (GstPad * pad, GstQuery * query)
 	GstDVBVideoSink *self;
 //	GstFormat format;
 	
+	printf("QUERY: type: %d\n", GST_QUERY_TYPE(query));
 	self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
 	switch (GST_QUERY_TYPE (query)) {
+	case GST_QUERY_POSITION:
+	{
+		gint64 cur = 0;
+		GstFormat format;
+
+		gst_query_parse_position (query, &format, NULL);
+		
+		if (format != GST_FORMAT_TIME)
+			return gst_pad_query_default (pad, query);
+
+		ioctl(self->fd, VIDEO_GET_PTS, &cur);
+		printf("PTS: %08llx", cur);
+		
+		cur *= 11111;
+		
+		gst_query_set_position (query, format, cur);
+		
+		GST_DEBUG_OBJECT (self, "position format %d", format);
+		return TRUE;
+	}
 	default:
 		return gst_pad_query_default (pad, query);
 	}
@@ -263,17 +288,27 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 {
 	GstDVBVideoSink *self;
 	self = GST_DVBVIDEOSINK (sink);
+	GST_DEBUG_OBJECT (self, "EVENT %s", gst_event_type_get_name(GST_EVENT_TYPE (event)));
+	
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
-	case GST_EVENT_FLUSH_STOP:
-		printf("DVB video sink FLUSH\n");
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		break;
+	case GST_EVENT_FLUSH_STOP:
+		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
+		while (1)
+		{
+			gchar command;
+			int res;
+
+			READ_COMMAND (self, command, res);
+			if (res < 0)
+				break;
+		}
+		break;
 	default:
-		printf("dvb video sink: unknown event type %d\n", GST_EVENT_TYPE (event)); 
-		return FALSE;
+		return TRUE;
 	}
-	return TRUE;
 }
 
 static GstFlowReturn
@@ -381,6 +416,7 @@ select_error:
 stopped:
 	{
 		GST_DEBUG_OBJECT (self, "Select stopped");
+		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		return GST_FLOW_WRONG_STATE;
 	}
 }
