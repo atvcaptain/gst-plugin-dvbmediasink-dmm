@@ -115,8 +115,9 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("audio/mpeg, "
-		"mpegversion = (int) [ 1, 2 ]; "
-		"audio/x-private1-ac3")
+		"mpegversion = (int) { 1, 2, 4 }; "
+		"audio/x-private1-ac3;"
+		"audio/x-ac3")
 );
 
 #define DEBUG_INIT(bla) \
@@ -278,12 +279,32 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	self->skip = 0;
 
-	if (!strcmp(type, "audio/mpeg"))
-		bypass = 1;
+	if (!strcmp(type, "audio/mpeg")) {
+		gint mpegversion;
+		gst_structure_get_int (structure, "mpegversion", &mpegversion);
+		switch (mpegversion) {
+			case 1:
+			case 2:
+				bypass = 1;
+				printf("MIMETYPE %s version %d\n",type,mpegversion);
+				break;
+			case 4:
+				bypass = 8;
+				printf("MIMETYPE %s version %d (AAC)\n",type,mpegversion);
+				break;
+			default:
+				g_error("unhandled mpeg version");
+				break;
+		}
+	}
 	else if (!strcmp(type, "audio/x-ac3") || !strcmp(type, "audio/ac3"))
-		bypass = 0;		
+	{
+		printf("MIMETYPE %s\n",type);
+		bypass = 0;
+	}
 	else if (!strcmp(type, "audio/x-private1-ac3"))
 	{
+		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
 		bypass = 0;
 		self->skip = 2;
 	} else

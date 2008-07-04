@@ -112,13 +112,27 @@ enum {
 	ARG_SILENT
 };
 
+#define COMMON_VIDEO_CAPS \
+  "width = (int) [ 16, 4096 ], " \
+  "height = (int) [ 16, 4096 ], " \
+  "framerate = (fraction) [ 0, MAX ]"
+
 static GstStaticPadTemplate sink_factory =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("video/mpeg, "
-		"mpegversion = (int) [ 1, 2 ], " "systemstream = (boolean) false")
+        	"mpegversion = (int) { 1, 2, 4 }, "
+        	"systemstream = (boolean) false, "
+        COMMON_VIDEO_CAPS "; "
+        	"video/x-wmv, "
+        COMMON_VIDEO_CAPS "; "
+        	"video/x-h264, "
+        COMMON_VIDEO_CAPS "; "
+        	"video/x-divx, "
+        COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
+        	"video/x-xvid, " COMMON_VIDEO_CAPS )
 );
 
 #define DEBUG_INIT(bla) \
@@ -140,6 +154,7 @@ static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
 static gboolean gst_dvbvideosink_query (GstPad * pad, GstQuery * query);
+static gboolean gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 
 static void
@@ -148,7 +163,7 @@ gst_dvbvideosink_base_init (gpointer klass)
 	static GstElementDetails element_details = {
 		"A DVB video sink",
 		"Generic/DVBVideoSink",
-		"Outputs a MPEG2 PES / ES into a DVB video device for hardware playback",
+		"Outputs a MPEG2 or .H264 PES / ES into a DVB video device for hardware playback",
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
@@ -194,6 +209,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	
 	pad = GST_BASE_SINK_PAD (klass);
 	
+	gst_pad_set_setcaps_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps));
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_query));
 	
 	klass->silent = FALSE;
@@ -419,6 +435,68 @@ stopped:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		return GST_FLOW_WRONG_STATE;
 	}
+}
+
+static gboolean 
+gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
+{
+	GstStructure *structure;
+	const gchar *mimetype;
+	GstDVBVideoSink *self;
+	
+	self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
+
+	structure = gst_caps_get_structure (vscaps, 0);
+	mimetype = gst_structure_get_name (structure);
+	
+	if (!strcmp (mimetype, "video/mpeg")) {
+		gint mpegversion;
+		gst_structure_get_int (structure, "mpegversion", &mpegversion);
+		switch (mpegversion) {
+			case 2:
+				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 0);
+				printf("MIMETYPE video/mpeg 2 -> VIDEO_SET_STREAMTYPE, 0\n");
+			break;
+			case 4:
+				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 4);
+				printf("MIMETYPE video/mpeg 4 -> VIDEO_SET_STREAMTYPE, 4\n");
+			break;
+			default:
+			g_error("unhandled mpeg version");
+			break;
+		}
+	} else if (!strcmp (mimetype, "video/x-h264")) {
+		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 1);
+		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
+	} else if (!strcmp (mimetype, "video/x-xvid")) {
+		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 10);
+		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
+	} else if (!strcmp (mimetype, "video/x-divx")) {
+		gint divxversion;
+		gst_structure_get_int (structure, "divxversion", &divxversion);
+		switch (divxversion) {
+			case 3:
+				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 13);
+				printf("MIMETYPE video/x-divx vers. 3 -> VIDEO_SET_STREAMTYPE, 13\n");
+			break;
+			case 4:
+				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 14);
+				printf("MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14\n");
+			break;
+			case 5:
+				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 15);
+				printf("MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15\n");
+			break;
+			default:
+				g_error("unhandled divx version");
+			break;
+		}
+	} else if (!strcmp (mimetype, "video/x-wmv")) {
+		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 1);
+		printf("MIMETYPE video/x-wmv VIDEO_SET_STREAMTYPE, 5\n");
+	} else
+		g_error("unsupported stream type %s",mimetype);
+	return TRUE;
 }
 
 static gboolean
