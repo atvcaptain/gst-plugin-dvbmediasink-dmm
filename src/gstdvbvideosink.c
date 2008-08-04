@@ -451,18 +451,20 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 	
 	if (!strcmp (mimetype, "video/mpeg")) {
 		gint mpegversion;
+		int streamtype;
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
 		switch (mpegversion) {
+			case 1:
 			case 2:
 				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 0);
-				printf("MIMETYPE video/mpeg 2 -> VIDEO_SET_STREAMTYPE, 0\n");
+				printf("MIMETYPE video/mpeg %i -> VIDEO_SET_STREAMTYPE, 0\n",mpegversion);
 			break;
 			case 4:
 				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 4);
 				printf("MIMETYPE video/mpeg 4 -> VIDEO_SET_STREAMTYPE, 4\n");
 			break;
 			default:
-			g_error("unhandled mpeg version");
+			g_error("unhandled mpeg version: %i",mpegversion);
 			break;
 		}
 	} else if (!strcmp (mimetype, "video/x-h264")) {
