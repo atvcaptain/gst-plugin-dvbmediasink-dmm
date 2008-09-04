@@ -265,6 +265,7 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 static gboolean 
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
+	printf("DEBUG\n");
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 
 	GstStructure *structure;
@@ -278,12 +279,21 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	type = gst_structure_get_name (structure);
 
 	self->skip = 0;
-
 	if (!strcmp(type, "audio/mpeg")) {
 		gint mpegversion;
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
 		switch (mpegversion) {
 			case 1:
+			{
+				gint layer;
+				gst_structure_get_int (structure, "layer", &layer);
+				if ( layer == 3 )
+					bypass = 0xA;
+				else
+					bypass = 1;
+				printf("MIMETYPE %s version %d layer %d\n",type,mpegversion,layer);
+				break;
+			}
 			case 2:
 				bypass = 1;
 				printf("MIMETYPE %s version %d\n",type,mpegversion);
@@ -313,7 +323,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		return FALSE;
 	}
 
-	GST_DEBUG_OBJECT(self, "setting dvb mode %d\n", bypass);
+	GST_DEBUG_OBJECT(self, "setting dvb mode 0x%02x\n", bypass);
 	ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass);
 
 	return TRUE;
