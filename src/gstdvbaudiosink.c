@@ -142,6 +142,8 @@ static gboolean gst_dvbaudiosink_query (GstPad * pad, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 
+gboolean bypass_set = FALSE;
+
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
 {
@@ -265,7 +267,6 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 static gboolean 
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
-	printf("DEBUG\n");
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 
 	GstStructure *structure;
@@ -324,7 +325,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	}
 
 	GST_DEBUG_OBJECT(self, "setting dvb mode 0x%02x\n", bypass);
-	ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass);
+	if (!ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass));
+		bypass_set = TRUE;
 
 	return TRUE;
 }
@@ -374,6 +376,13 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	size = GST_BUFFER_SIZE (buffer) - skip;
 	
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
+
+	if ( !bypass_set )
+	{
+		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
+				("hardware decoder not setup (no caps in pipeline?)"));
+		return GST_FLOW_ERROR;
+	}
 
 	FD_ZERO (&readfds);
 	FD_SET (READ_SOCKET (self), &readfds);
