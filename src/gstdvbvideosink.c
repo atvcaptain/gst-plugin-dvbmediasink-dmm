@@ -65,6 +65,7 @@
 #include <sys/socket.h>
 #include <linux/dvb/video.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include <gst/gst.h>
 
@@ -213,7 +214,9 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_query));
 	
 	klass->silent = FALSE;
-	
+	klass->seq_header = NULL;
+	klass->must_send_header = NULL;
+
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
@@ -321,16 +324,16 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 			if (res < 0)
 				break;
 		}
-		break;
 	default:
-		return TRUE;
+		break;
 	}
+	return TRUE;
 }
 
 static GstFlowReturn
 gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
-	unsigned char pes_header[19];
+	unsigned char pes_header[24];
 	GstDVBVideoSink *self;
 	unsigned int size;
 	fd_set readfds;
@@ -377,25 +380,29 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
+	if (self->must_send_header) {
+		write(self->fd, self->seq_header, 63);
+		self->must_send_header = FALSE;
+	}
+
 	pes_header[0] = 0;
 	pes_header[1] = 0;
 	pes_header[2] = 1;
 	pes_header[3] = 0xE0;
-	
+
 		/* do we have a timestamp? */
-	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
-	{
-		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000; /* convert ns to 90kHz */
-		
-		pes_header[4] = (size + 13) >> 8;
-		pes_header[5] = (size + 13) & 0xFF;
+	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
+		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
+
+		pes_header[4] = (size + 13 + (self->seq_header ? 4 : 0)) >> 8;
+		pes_header[5] = (size + 13 + (self->seq_header ? 4 : 0)) & 0xFF;
 		
 		pes_header[6] = 0x80;
 		pes_header[7] = 0xC0;
 		
 		pes_header[8] = 10;
 		
-		pes_header[9]	= 0x31 | ((pts >> 29) & 0xE);
+		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
@@ -408,9 +415,17 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
 		pes_header[17] = dts >> 7;
 		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
-		write(self->fd, pes_header, 19);
-	} else
-	{
+		if (self->seq_header) {
+			pes_header[19] = 0;
+			pes_header[20] = 0;
+			pes_header[21] = 1;
+			pes_header[22] = 0xb6;
+			write(self->fd, pes_header, 23);
+		}
+		else
+			write(self->fd, pes_header, 19);
+	}
+	else {
 		pes_header[4] = (size + 3) >> 8;
 		pes_header[5] = (size + 3) & 0xFF;
 		pes_header[6] = 0x80;
@@ -418,9 +433,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[8] = 0;
 		write(self->fd, pes_header, 9);
 	}
-	
-	write(self->fd, GST_BUFFER_DATA (buffer), GST_BUFFER_SIZE (buffer));
 
+	write(self->fd, GST_BUFFER_DATA (buffer), size);
 	return GST_FLOW_OK;
 select_error:
 	{
@@ -440,62 +454,91 @@ stopped:
 static gboolean 
 gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 {
-	GstStructure *structure;
-	const gchar *mimetype;
-	GstDVBVideoSink *self;
-	
-	self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
+	GstStructure *structure = gst_caps_get_structure (vscaps, 0);
+	const gchar *mimetype = gst_structure_get_name (structure);
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
+	int streamtype = -1;
 
-	structure = gst_caps_get_structure (vscaps, 0);
-	mimetype = gst_structure_get_name (structure);
-	
 	if (!strcmp (mimetype, "video/mpeg")) {
 		gint mpegversion;
-		int streamtype;
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
 		switch (mpegversion) {
 			case 1:
+				streamtype = 5;
+				printf("MIMETYPE video/mpeg %d -> VIDEO_SET_STREAMTYPE, 5\n",mpegversion);
+			break;
 			case 2:
-				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 0);
-				printf("MIMETYPE video/mpeg %i -> VIDEO_SET_STREAMTYPE, 0\n",mpegversion);
+				streamtype = 0;
+				printf("MIMETYPE video/mpeg %d -> VIDEO_SET_STREAMTYPE, 0\n",mpegversion);
 			break;
 			case 4:
-				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 4);
+				streamtype = 4;
 				printf("MIMETYPE video/mpeg 4 -> VIDEO_SET_STREAMTYPE, 4\n");
 			break;
 			default:
-			g_error("unhandled mpeg version: %i",mpegversion);
+				g_error("unhandled mpeg version: %d",mpegversion);
 			break;
 		}
 	} else if (!strcmp (mimetype, "video/x-h264")) {
-		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 1);
+		streamtype = 1;
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
 	} else if (!strcmp (mimetype, "video/x-xvid")) {
-		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 10);
+		streamtype = 10;
 		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
 	} else if (!strcmp (mimetype, "video/x-divx")) {
 		gint divxversion;
 		gst_structure_get_int (structure, "divxversion", &divxversion);
 		switch (divxversion) {
 			case 3:
-				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 13);
+			{
+				#define B_GET_BITS(w,e,b)  (((w)>>(b))&(((unsigned)(-1))>>((sizeof(unsigned))*8-(e+1-b))))
+				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
+				static const guint8 brcm_divx311_sequence_header[] = {
+					0x00, 0x00, 0x01, 0xE0, 0x00, 0x39, 0x80, 0xC0, // PES HEADER
+					0x0A, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, 0xFF, // ..
+					0xFF, 0xFF, 0xFF, // ..
+					0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x20, /* 0 .. 7 */
+					0x08, 0xC8, 0x0D, 0x40, 0x00, 0x53, 0x88, 0x40, /* 8 .. 15 */
+					0x0C, 0x40, 0x01, 0x90, 0x00, 0x97, 0x53, 0x0A, /* 16 .. 24 */
+					0x00, 0x00, 0x00, 0x00,
+					0x30, 0x7F, 0x00, 0x00, 0x01, 0xB2, 0x44, 0x69, /* 0 .. 7 */
+					0x76, 0x58, 0x33, 0x31, 0x31, 0x41, 0x4E, 0x44  /* 8 .. 15 */
+				};
+				guint8 *data = malloc(63);
+				gint height, width;
+				gst_structure_get_int (structure, "height", &height);
+				gst_structure_get_int (structure, "width", &width);
+				memcpy(data, brcm_divx311_sequence_header, 63);
+				self->seq_header = data;
+				data += 43;
+				data[0] = B_GET_BITS(width,11,4);
+				data[1] = B_SET_BITS("width [3..0]", B_GET_BITS(width,3,0), 7, 4) |
+					B_SET_BITS("'10'", 0x02, 3, 2) |
+					B_SET_BITS("height [11..10]", B_GET_BITS(height,11,10), 1, 0);
+				data[2] = B_GET_BITS(height,9,2);
+				data[3]= B_SET_BITS("height [1.0]", B_GET_BITS(height,1,0), 7, 6) |
+					B_SET_BITS("'100000'", 0x20, 5, 0);
+				streamtype = 13;
+				self->must_send_header = TRUE;
 				printf("MIMETYPE video/x-divx vers. 3 -> VIDEO_SET_STREAMTYPE, 13\n");
+			}
 			break;
 			case 4:
-				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 14);
+				streamtype = 14;
 				printf("MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14\n");
 			break;
 			case 5:
-				ioctl(self->fd, VIDEO_SET_STREAMTYPE, 15);
+				streamtype = 15;
 				printf("MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15\n");
 			break;
 			default:
 				g_error("unhandled divx version");
 			break;
 		}
-	} else if (!strcmp (mimetype, "video/x-wmv")) {
-		ioctl(self->fd, VIDEO_SET_STREAMTYPE, 1);
-		printf("MIMETYPE video/x-wmv VIDEO_SET_STREAMTYPE, 5\n");
+	}
+	if (streamtype != -1) {
+		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0)
+			perror("VIDEO_SET_STREAMTYPE");
 	} else
 		g_error("unsupported stream type %s",mimetype);
 	return TRUE;
@@ -525,6 +568,7 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
 		ioctl(self->fd, VIDEO_PLAY);
 	}
+
 	return TRUE;
 	/* ERRORS */
 socket_pair:
@@ -549,6 +593,9 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
+
+	if (self->seq_header)
+		free(self->seq_header);
 
 	return TRUE;
 }
