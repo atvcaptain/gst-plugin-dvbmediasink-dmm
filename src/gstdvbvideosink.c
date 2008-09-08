@@ -312,9 +312,13 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
+		if (self->seq_header)
+			self->must_send_header = TRUE;
 		break;
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
+		if (self->seq_header)
+			self->must_send_header = TRUE;
 		while (1)
 		{
 			gchar command;
