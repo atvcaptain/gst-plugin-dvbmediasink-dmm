@@ -124,16 +124,18 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("video/mpeg, "
-        	"mpegversion = (int) { 1, 2, 4 }, "
-        	"systemstream = (boolean) false, "
-        COMMON_VIDEO_CAPS "; "
-        	"video/x-wmv, "
-        COMMON_VIDEO_CAPS "; "
-        	"video/x-h264, "
-        COMMON_VIDEO_CAPS "; "
-        	"video/x-divx, "
-        COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
-        	"video/x-xvid, " COMMON_VIDEO_CAPS )
+		"mpegversion = (int) { 1, 2, 4 }, "
+		"systemstream = (boolean) false, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-wmv, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h264, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h263, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-divx, "
+	COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
+		"video/x-xvid, " COMMON_VIDEO_CAPS )
 );
 
 #define DEBUG_INIT(bla) \
@@ -215,7 +217,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	
 	klass->silent = FALSE;
 	klass->seq_header = NULL;
-	klass->must_send_header = NULL;
+	klass->must_send_header = FALSE;
 
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
@@ -468,16 +470,16 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
 		switch (mpegversion) {
 			case 1:
-				streamtype = 5;
-				printf("MIMETYPE video/mpeg %d -> VIDEO_SET_STREAMTYPE, 5\n",mpegversion);
+				streamtype = 6;
+				printf("MIMETYPE video/mpeg1 -> VIDEO_SET_STREAMTYPE, 6\n");
 			break;
 			case 2:
 				streamtype = 0;
-				printf("MIMETYPE video/mpeg %d -> VIDEO_SET_STREAMTYPE, 0\n",mpegversion);
+				printf("MIMETYPE video/mpeg2 -> VIDEO_SET_STREAMTYPE, 0\n");
 			break;
 			case 4:
 				streamtype = 4;
-				printf("MIMETYPE video/mpeg 4 -> VIDEO_SET_STREAMTYPE, 4\n");
+				printf("MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4\n");
 			break;
 			default:
 				g_error("unhandled mpeg version: %d",mpegversion);
@@ -486,6 +488,9 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 	} else if (!strcmp (mimetype, "video/x-h264")) {
 		streamtype = 1;
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
+	} else if (!strcmp (mimetype, "video/x-h263")) {
+		streamtype = 2;
+		printf("MIMETYPE video/x-h263 VIDEO_SET_STREAMTYPE, 2\n");
 	} else if (!strcmp (mimetype, "video/x-xvid")) {
 		streamtype = 10;
 		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
@@ -494,6 +499,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		gst_structure_get_int (structure, "divxversion", &divxversion);
 		switch (divxversion) {
 			case 3:
+divx3:
 			{
 				#define B_GET_BITS(w,e,b)  (((w)>>(b))&(((unsigned)(-1))>>((sizeof(unsigned))*8-(e+1-b))))
 				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
