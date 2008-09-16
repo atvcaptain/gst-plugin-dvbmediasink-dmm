@@ -208,16 +208,15 @@ static void
 gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		GstDVBVideoSinkClass * gclass)
 {
-	GstPad *pad;
-	
-	pad = GST_BASE_SINK_PAD (klass);
+	GstPad *pad = GST_BASE_SINK_PAD (klass);
 	
 	gst_pad_set_setcaps_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps));
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_query));
 	
 	klass->silent = FALSE;
-	klass->seq_header = NULL;
+	klass->divx311_header = NULL;
 	klass->must_send_header = FALSE;
+	klass->codec_data = NULL;
 
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
@@ -264,11 +263,10 @@ gst_dvbvideosink_get_property (GObject *object, guint prop_id,
 static gboolean
 gst_dvbvideosink_query (GstPad * pad, GstQuery * query)
 {
-	GstDVBVideoSink *self;
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
 //	GstFormat format;
 	
 	printf("QUERY: type: %d\n", GST_QUERY_TYPE(query));
-	self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
 	switch (GST_QUERY_TYPE (query)) {
 	case GST_QUERY_POSITION:
 	{
@@ -307,20 +305,17 @@ static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 static gboolean
 gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 {
-	GstDVBVideoSink *self;
-	self = GST_DVBVIDEOSINK (sink);
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
 	GST_DEBUG_OBJECT (self, "EVENT %s", gst_event_type_get_name(GST_EVENT_TYPE (event)));
-	
+
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
-		if (self->seq_header)
-			self->must_send_header = TRUE;
+		self->must_send_header = TRUE;
 		break;
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
-		if (self->seq_header)
-			self->must_send_header = TRUE;
+		self->must_send_header = TRUE;
 		while (1)
 		{
 			gchar command;
@@ -339,17 +334,16 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 static GstFlowReturn
 gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
-	unsigned char pes_header[24];
-	GstDVBVideoSink *self;
-	unsigned int size;
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
+	unsigned char *data = GST_BUFFER_DATA(buffer);
+	unsigned int data_len = GST_BUFFER_SIZE (buffer);
+	guint8 pes_header[2048];
+	unsigned int pes_header_len=0;
+	unsigned int payload_len=0;
 	fd_set readfds;
 	fd_set writefds;
 	gint retval;
 
-	self = GST_DVBVIDEOSINK (sink);
-	
-	size = GST_BUFFER_SIZE (buffer);
-	
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	FD_ZERO (&readfds);
@@ -360,7 +354,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	
 	do {
 		GST_DEBUG_OBJECT (self, "going into select, have %d bytes to write",
-				size);
+				data_len);
 		retval = select (FD_SETSIZE, &readfds, &writefds, NULL, NULL);
 	} while ((retval == -1 && errno == EINTR));
 
@@ -386,11 +380,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
-	if (self->must_send_header) {
-		write(self->fd, self->seq_header, 63);
-		self->must_send_header = FALSE;
-	}
-
 	pes_header[0] = 0;
 	pes_header[1] = 0;
 	pes_header[2] = 1;
@@ -400,9 +389,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
 
-		pes_header[4] = (size + 13 + (self->seq_header ? 4 : 0)) >> 8;
-		pes_header[5] = (size + 13 + (self->seq_header ? 4 : 0)) & 0xFF;
-		
 		pes_header[6] = 0x80;
 		pes_header[7] = 0xC0;
 		
@@ -413,34 +399,131 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
-		
-		int64_t dts = pts; /* what to use as DTS-PTS offset? */
-		
+
+		int64_t dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
+
 		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
 		pes_header[15] = dts >> 22;
 		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
 		pes_header[17] = dts >> 7;
 		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
-		if (self->seq_header) {
+
+		pes_header_len = 19;
+
+		if (self->divx311_header) {
+			if (self->must_send_header) {
+				write(self->fd, self->divx311_header, 63);
+				self->must_send_header = FALSE;
+			}
 			pes_header[19] = 0;
 			pes_header[20] = 0;
 			pes_header[21] = 1;
 			pes_header[22] = 0xb6;
-			write(self->fd, pes_header, 23);
+			pes_header_len += 4;
 		}
-		else
-			write(self->fd, pes_header, 19);
+		else if (self->codec_data) {
+			unsigned int pos = 0;
+			unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
+			while (1) {
+				pos += 4;
+//				printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
+				if ((pos + pack_len) >= data_len)
+					break;
+				pos += pack_len;
+//				printf("patch %02x %02x %02x %02x\n",
+//					data[pos],
+//					data[pos + 1],
+//					data[pos + 2],
+//					data[pos + 3]);
+				pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
+				data[pos] = 0;
+				data[pos + 1] = 0;
+				data[pos + 2] = 0;
+				data[pos + 3] = 1;
+			}
+			data_len -= 4;
+			data += 4;
+			switch(data[1])
+			{
+				case 0x88:
+					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x10\x00\x00\x00\x01", 10);
+					pes_header_len += 10;
+					break;
+				case 0x9A:
+					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x30\x00\x00\x00\x01", 10);
+					pes_header_len += 10;
+					break;
+				case 0x9E:
+					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x50\x00\x00\x00\x01", 10);
+					pes_header_len += 10;
+					break;
+				default:
+					printf("unknown h264 data tag %02x %02x !!! (please report!)\n", data[0], data[1]);
+					break;
+			}
+			if (self->must_send_header) {
+				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
+				unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
+				unsigned int pos=0;
+//				printf("1\n");
+				if (codec_data_len > 7) {
+					unsigned short len = (codec_data[6] << 8) | codec_data[7];
+//					printf("2 %d bytes\n", len);
+					if (codec_data_len >= (len + 8)) {
+//						printf("3\n");
+						memcpy(pes_header+pes_header_len, codec_data+8, len);
+						pes_header_len += len;
+						pos = 8 + len;
+						if (codec_data_len > (pos + 2)) {
+							len = (codec_data[pos+1] << 8) | codec_data[pos+2];
+//							printf("4 %d bytes\n", len);
+							pos += 3;
+							if (codec_data_len >= (pos+len)) {
+								printf("codec data ok!\n");
+								memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
+								pes_header_len += 4;
+								memcpy(pes_header+pes_header_len, codec_data+pos, len);
+								pes_header_len += len;
+								memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
+								pes_header_len += 4;
+							}
+							else
+								printf("codec_data to short(4)\n");
+						}
+						else
+							printf("codec_data to short(3)!\n");
+					}
+					else
+						printf("codec_data to short(2)!\n");
+				}
+				else
+					printf("codec_data to short(1)!\n");
+				self->must_send_header = FALSE;
+			}
+		}
 	}
 	else {
-		pes_header[4] = (size + 3) >> 8;
-		pes_header[5] = (size + 3) & 0xFF;
+//		printf("no timestamp!\n");
 		pes_header[6] = 0x80;
 		pes_header[7] = 0x00;
 		pes_header[8] = 0;
-		write(self->fd, pes_header, 9);
+		pes_header_len = 9;
 	}
 
-	write(self->fd, GST_BUFFER_DATA (buffer), size);
+	payload_len = data_len + pes_header_len - 6;
+
+	if (payload_len <= 0xFFFF) {
+		pes_header[4] = payload_len >> 8;
+		pes_header[5] = payload_len & 0xFF;
+	}
+	else {
+		pes_header[4] = 0;
+		pes_header[5] = 0;
+	}
+
+	write(self->fd, pes_header, pes_header_len);
+	write(self->fd, data, data_len);
+
 	return GST_FLOW_OK;
 select_error:
 	{
@@ -486,7 +569,14 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 			break;
 		}
 	} else if (!strcmp (mimetype, "video/x-h264")) {
+		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
 		streamtype = 1;
+		if (codec_data) {
+			printf("H264 have codec data.. force mkv!\n");
+			self->codec_data = gst_value_get_buffer (codec_data);
+			gst_buffer_ref (self->codec_data);
+		}
+		self->must_send_header = TRUE;
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
 	} else if (!strcmp (mimetype, "video/x-h263")) {
 		streamtype = 2;
@@ -499,7 +589,6 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		gst_structure_get_int (structure, "divxversion", &divxversion);
 		switch (divxversion) {
 			case 3:
-divx3:
 			{
 				#define B_GET_BITS(w,e,b)  (((w)>>(b))&(((unsigned)(-1))>>((sizeof(unsigned))*8-(e+1-b))))
 				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
@@ -519,7 +608,7 @@ divx3:
 				gst_structure_get_int (structure, "height", &height);
 				gst_structure_get_int (structure, "width", &width);
 				memcpy(data, brcm_divx311_sequence_header, 63);
-				self->seq_header = data;
+				self->divx311_header = data;
 				data += 43;
 				data[0] = B_GET_BITS(width,11,4);
 				data[1] = B_SET_BITS("width [3..0]", B_GET_BITS(width,3,0), 7, 4) |
@@ -557,8 +646,7 @@ divx3:
 static gboolean
 gst_dvbvideosink_start (GstBaseSink * basesink)
 {
-	GstDVBVideoSink *self;
-	self = GST_DVBVIDEOSINK (basesink);
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
 
@@ -592,8 +680,7 @@ socket_pair:
 static gboolean
 gst_dvbvideosink_stop (GstBaseSink * basesink)
 {
-	GstDVBVideoSink *self;
-	self = GST_DVBVIDEOSINK (basesink);
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	if (self->fd >= 0)
 	{
 		ioctl(self->fd, VIDEO_STOP);
@@ -604,8 +691,11 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
 
-	if (self->seq_header)
-		free(self->seq_header);
+	if (self->divx311_header)
+		free(self->divx311_header);
+
+	if (self->codec_data)
+		gst_buffer_unref(self->codec_data);
 
 	return TRUE;
 }
