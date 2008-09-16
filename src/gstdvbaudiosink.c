@@ -193,9 +193,7 @@ static void
 gst_dvbaudiosink_init (GstDVBAudioSink *klass,
 		GstDVBAudioSinkClass * gclass)
 {
-	GstPad *pad;
-	
-	pad = GST_BASE_SINK_PAD (klass);
+	GstPad *pad = GST_BASE_SINK_PAD (klass);
 	
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbaudiosink_query));
 	
@@ -334,10 +332,9 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 static gboolean
 gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 {
-	GstDVBAudioSink *self;
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	GST_DEBUG_OBJECT (self, "EVENT %s", gst_event_type_get_name(GST_EVENT_TYPE (event)));
 
-	self = GST_DVBAUDIOSINK (sink);
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
@@ -355,26 +352,22 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		}
 		break;
 	default:
-		return TRUE;
+		break;
 	}
+	return TRUE;
 }
 
 static GstFlowReturn
 gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
 	unsigned char pes_header[19];
-	GstDVBAudioSink *self;
-	unsigned int size;
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
+	int skip = self->skip;
+	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
 	fd_set readfds;
 	fd_set writefds;
 	gint retval;
-	
-	self = GST_DVBAUDIOSINK (sink);
 
-	int skip = self->skip;
-	
-	size = GST_BUFFER_SIZE (buffer) - skip;
-	
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	if ( !bypass_set )
@@ -483,8 +476,7 @@ stopped:
 static gboolean
 gst_dvbaudiosink_start (GstBaseSink * basesink)
 {
-	GstDVBAudioSink *self;
-	self = GST_DVBAUDIOSINK (basesink);
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
 	
@@ -518,8 +510,7 @@ socket_pair:
 static gboolean
 gst_dvbaudiosink_stop (GstBaseSink * basesink)
 {
-	GstDVBAudioSink *self;
-	self = GST_DVBAUDIOSINK (basesink);
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	if (self->fd >= 0)
 	{
 		ioctl(self->fd, AUDIO_STOP);
