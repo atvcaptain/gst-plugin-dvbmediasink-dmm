@@ -423,43 +423,19 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 		else if (self->codec_data) {
 			unsigned int pos = 0;
-			unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
-			while (1) {
-				pos += 4;
-//				printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
-				if ((pos + pack_len) >= data_len)
-					break;
-				pos += pack_len;
+			while(TRUE) {
+				unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
 //				printf("patch %02x %02x %02x %02x\n",
 //					data[pos],
 //					data[pos + 1],
 //					data[pos + 2],
 //					data[pos + 3]);
-				pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
-				data[pos] = 0;
-				data[pos + 1] = 0;
-				data[pos + 2] = 0;
-				data[pos + 3] = 1;
-			}
-			data_len -= 4;
-			data += 4;
-			switch(data[1])
-			{
-				case 0x88:
-					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x10\x00\x00\x00\x01", 10);
-					pes_header_len += 10;
+				memcpy(data+pos, "\x00\x00\x00\x01", 4);
+//				printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
+				pos += 4;
+				if ((pos + pack_len) >= data_len)
 					break;
-				case 0x9A:
-					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x30\x00\x00\x00\x01", 10);
-					pes_header_len += 10;
-					break;
-				case 0x9E:
-					memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01\x09\x50\x00\x00\x00\x01", 10);
-					pes_header_len += 10;
-					break;
-				default:
-					printf("unknown h264 data tag %02x %02x !!! (please report!)\n", data[0], data[1]);
-					break;
+				pos += pack_len;
 			}
 			if (self->must_send_header) {
 				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
@@ -471,6 +447,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //					printf("2 %d bytes\n", len);
 					if (codec_data_len >= (len + 8)) {
 //						printf("3\n");
+						memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
+						pes_header_len += 4;
 						memcpy(pes_header+pes_header_len, codec_data+8, len);
 						pes_header_len += len;
 						pos = 8 + len;
@@ -484,8 +462,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 								pes_header_len += 4;
 								memcpy(pes_header+pes_header_len, codec_data+pos, len);
 								pes_header_len += len;
-								memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
-								pes_header_len += 4;
 							}
 							else
 								printf("codec_data to short(4)\n");

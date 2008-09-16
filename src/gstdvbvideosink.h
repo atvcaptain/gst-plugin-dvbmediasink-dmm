@@ -74,7 +74,10 @@ struct _GstDVBVideoSink
 	gint control_sock[2];
 
 	gboolean silent, must_send_header;
-	guint8 *seq_header;
+
+	GstBuffer *codec_data;
+
+	guint8 *divx311_header;
 
 	int fd;
 };
