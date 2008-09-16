@@ -450,6 +450,10 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 						memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
 						pes_header_len += 4;
 						memcpy(pes_header+pes_header_len, codec_data+8, len);
+						if (!memcmp(pes_header+pes_header_len, "\x67\x64\x00", 3)) {
+							pes_header[pes_header_len+3] = 0x29; // hardcode h264 level 4.1
+							printf("h264 level patched!\n");
+						}
 						pes_header_len += len;
 						pos = 8 + len;
 						if (codec_data_len > (pos + 2)) {
