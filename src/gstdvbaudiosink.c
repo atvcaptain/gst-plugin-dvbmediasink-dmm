@@ -302,7 +302,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				printf("MIMETYPE %s version %d (AAC)\n",type,mpegversion);
 				break;
 			default:
-				g_error("unhandled mpeg version");
+				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled mpeg version %i", mpegversion));
 				break;
 		}
 	}
@@ -318,14 +318,18 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		self->skip = 2;
 	} else
 	{
-		GST_DEBUG_OBJECT(self, "illegal streamtype %s!\n", type);
+		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
 		return FALSE;
 	}
 
 	GST_DEBUG_OBJECT(self, "setting dvb mode 0x%02x\n", bypass);
-	if (!ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass));
-		bypass_set = TRUE;
 
+	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
+	{
+		GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i", bypass));
+		return FALSE;
+	}
+	bypass_set = TRUE;
 	return TRUE;
 }
 
@@ -372,8 +376,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	if ( !bypass_set )
 	{
-		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
-				("hardware decoder not setup (no caps in pipeline?)"));
+		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
 		return GST_FLOW_ERROR;
 	}
 

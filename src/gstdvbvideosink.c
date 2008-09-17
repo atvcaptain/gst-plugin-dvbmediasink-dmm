@@ -545,7 +545,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				printf("MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4\n");
 			break;
 			default:
-				g_error("unhandled mpeg version: %d",mpegversion);
+				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled mpeg version %i", mpegversion));
 			break;
 		}
 	} else if (!strcmp (mimetype, "video/x-h264")) {
@@ -611,15 +611,16 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				printf("MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15\n");
 			break;
 			default:
-				g_error("unhandled divx version");
+				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled divx version %i", divxversion));
 			break;
 		}
 	}
 	if (streamtype != -1) {
 		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0)
-			perror("VIDEO_SET_STREAMTYPE");
+			GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
 	} else
-		g_error("unsupported stream type %s",mimetype);
+		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", mimetype));
+
 	return TRUE;
 }
 
