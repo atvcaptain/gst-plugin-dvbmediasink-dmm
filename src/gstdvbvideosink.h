@@ -47,6 +47,8 @@
 #ifndef __GST_DVBVIDEOSINK_H__
 #define __GST_DVBVIDEOSINK_H__
 
+#define PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
 
@@ -78,6 +80,12 @@ struct _GstDVBVideoSink
 	GstBuffer *codec_data;
 
 	guint8 *divx311_header;
+
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	/* data needed to pack bitstream (divx5 / xvid) */
+	gint num_non_keyframes, must_pack_bitstream, time_inc_bits, time_inc;
+	GstBuffer *prev_frame;
+#endif
 
 	int fd;
 };

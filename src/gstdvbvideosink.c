@@ -75,6 +75,63 @@
 #define VIDEO_GET_PTS              _IOR('o', 57, gint64)
 #endif
 
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+struct bitstream
+{
+	guint8 *data;
+	guint8 last;
+	int avail;
+};
+
+void bitstream_init(struct bitstream *bit, const void *buffer, gboolean wr)
+{
+	bit->data = (guint8*) buffer;
+	if (wr) {
+		bit->avail = 0;
+		bit->last = 0;
+	}
+	else {
+		bit->avail = 8;
+		bit->last = *bit->data++;
+	}
+}
+
+unsigned long bitstream_get(struct bitstream *bit, int bits)
+{
+	unsigned long res=0;
+	while (bits)
+	{
+		unsigned int d=bits;
+		if (!bit->avail) {
+			bit->last = *bit->data++;
+			bit->avail = 8;
+		}
+		if (d > bit->avail)
+			d=bit->avail;
+		res<<=d;
+		res|=(bit->last>>(bit->avail-d))&~(-1<<d);
+		bit->avail-=d;
+		bits-=d;
+	}
+	return res;
+}
+
+void bitstream_put(struct bitstream *bit, unsigned long val, int bits)
+{
+	while (bits)
+	{
+		bit->last |= ((val & (1 << (bits-1))) ? 1 : 0) << (7 - bit->avail);
+		if (++bit->avail == 8) {
+			*bit->data = bit->last;
+			++bit->data;
+			bit->last = 0;
+			bit->avail = 0;
+		}
+		--bits;
+	}
+}
+#endif
+
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Select is used to determine when the fd is ready for use. When the element state is changed,
  * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
@@ -217,6 +274,9 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->divx311_header = NULL;
 	klass->must_send_header = FALSE;
 	klass->codec_data = NULL;
+	klass->must_pack_bitstream = 0;
+	klass->num_non_keyframes = 0;
+	klass->prev_frame = NULL;
 
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
@@ -343,8 +403,18 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	fd_set readfds;
 	fd_set writefds;
 	gint retval;
+//	int i=0;
 
-//	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	gboolean commit_prev_frame_data = FALSE,
+			cache_prev_frame = FALSE;
+#endif
+
+//	for (;i < (data_len > 0xF ? 0xF : data_len); ++i)
+//		printf("%02x ", data[i]);
+//	printf("%d bytes\n", data_len);
+
+//	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	FD_ZERO (&readfds);
 	FD_SET (READ_SOCKET (self), &readfds);
@@ -380,6 +450,78 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	if (self->must_pack_bitstream == 1) {
+		cache_prev_frame = TRUE;
+		unsigned int pos = 0;
+		while(pos < data_len) {
+			if (data[pos++])
+				continue;
+			if (data[pos++])
+				continue;
+			if (data[pos++] != 1)
+				continue;
+			if ((data[pos++] & 0xF0) == 0x20) { // we need time_inc_res
+				gboolean low_delay=FALSE;
+				unsigned int ver_id = 1, shape=0, time_inc_res=0, tmp=0;
+				struct bitstream bit;
+				bitstream_init(&bit, data+pos, 0);
+				bitstream_get(&bit, 9);
+				if (bitstream_get(&bit, 1)) {
+					ver_id = bitstream_get(&bit, 4); // ver_id
+					bitstream_get(&bit, 3);
+				}
+				if ((tmp=bitstream_get(&bit, 4)) == 15) { // Custom Aspect Ration
+					bitstream_get(&bit, 8); // skip AR width
+					bitstream_get(&bit, 8); // skip AR height
+				}
+				if (bitstream_get(&bit, 1)) {
+					bitstream_get(&bit, 2);
+					low_delay = bitstream_get(&bit, 1) ? TRUE : FALSE;
+					if (bitstream_get(&bit, 1)) {
+						bitstream_get(&bit, 32);
+						bitstream_get(&bit, 32);
+						bitstream_get(&bit, 15);
+					}
+				}
+				shape = bitstream_get(&bit, 2);
+				if (ver_id != 1 && shape == 3 /* Grayscale */)
+					bitstream_get(&bit, 4);
+				bitstream_get(&bit, 1);
+				time_inc_res = bitstream_get(&bit, 16);
+				self->time_inc_bits = 0;
+				while (time_inc_res) { // count bits
+					++self->time_inc_bits;
+					time_inc_res >>= 1;
+				}
+//				printf("%d time_inc_bits\n", self->time_inc_bits);
+			}
+		}
+	}
+
+	if (self->must_pack_bitstream == 1) {
+		unsigned int pos = 0;
+		while(pos < data_len) {
+			if (data[pos++])
+				continue;
+			if (data[pos++])
+				continue;
+			if (data[pos++] != 1)
+				continue;
+			if (data[pos++] != 0xB2)
+				continue;
+			if (data_len - pos < 13)
+				break;
+			if (!strcmp((char*)data+pos, "DivX503b1393p"))
+				self->must_pack_bitstream = 0;
+//			if (self->must_pack_bitstream)
+//				printf("pack needed\n");
+//			else
+//				printf("no pack needed\n");
+		}
+	}
+#endif
+
 	pes_header[0] = 0;
 	pes_header[1] = 0;
 	pes_header[2] = 1;
@@ -388,6 +530,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		/* do we have a timestamp? */
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
+		unsigned long long dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
 
 		pes_header[6] = 0x80;
 		pes_header[7] = 0xC0;
@@ -400,8 +543,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
 
-		int64_t dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
-
 		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
 		pes_header[15] = dts >> 22;
 		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
@@ -410,7 +551,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		pes_header_len = 19;
 
-		if (self->divx311_header) {
+		if (self->divx311_header) {  // DIVX311 stuff
 			if (self->must_send_header) {
 				write(self->fd, self->divx311_header, 63);
 				self->must_send_header = FALSE;
@@ -421,7 +562,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			pes_header[22] = 0xb6;
 			pes_header_len += 4;
 		}
-		else if (self->codec_data) {
+		else if (self->codec_data) {  // MKV stuff
 			unsigned int pos = 0;
 			while(TRUE) {
 				unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
@@ -490,7 +631,136 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_len = 9;
 	}
 
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	if (self->must_pack_bitstream == 1) {
+		unsigned int pos = 0;
+		gboolean i_frame = FALSE;
+//		gboolean s_frame = FALSE;
+		while(pos < data_len) {
+			if (data[pos++])
+				continue;
+			if (data[pos++])
+				continue;
+			if (data[pos++] != 1)
+				continue;
+			if (data[pos++] != 0xB6)
+				continue;
+			switch ((data[pos] & 0xC0) >> 6) {
+				case 0: // I-Frame
+//					printf("I ");
+					cache_prev_frame = FALSE;
+					i_frame = TRUE;
+				case 1: // P-Frame
+//					printf("P ");
+					if (self->prev_frame != buffer) {
+						struct bitstream bit;
+						gboolean store_frame=FALSE;
+//						if (!i_frame)
+//							printf("P ");
+						if (self->prev_frame) {
+							if (!self->num_non_keyframes) {
+//								printf("no non keyframes...immediate commit prev frame\n");
+								GstFlowReturn ret = gst_dvbvideosink_render(sink, self->prev_frame);
+								gst_buffer_unref(self->prev_frame);
+								self->prev_frame = NULL;
+								if (ret != GST_FLOW_OK)
+									return ret;
+								store_frame = TRUE;
+							}
+							else {
+								struct bitstream bit;
+//								int i=-4;
+								pes_header[pes_header_len++] = 0;
+								pes_header[pes_header_len++] = 0;
+								pes_header[pes_header_len++] = 1;
+								pes_header[pes_header_len++] = 0xB6;
+								bitstream_init(&bit, pes_header+pes_header_len, 1);
+								bitstream_put(&bit, 1, 2);
+								bitstream_put(&bit, 0, 1);
+								bitstream_put(&bit, 1, 1);
+								bitstream_put(&bit, self->time_inc, self->time_inc_bits);
+								bitstream_put(&bit, 1, 1);
+								bitstream_put(&bit, 0, 1);
+								bitstream_put(&bit, 0x7F >> bit.avail, 8 - bit.avail);
+//								printf(" insert pack frame %d non keyframes, time_inc %d, time_inc_bits %d -",
+//									self->num_non_keyframes, self->time_inc, self->time_inc_bits);
+//								for (; i < (bit.data - (pes_header+pes_header_len)); ++i)
+//									printf(" %02x", pes_header[pes_header_len+i];
+//								printf("\nset data_len to 0!\n");
+								data_len = 0;
+								pes_header_len += bit.data - (pes_header+pes_header_len);
+								cache_prev_frame = TRUE;
+							}
+						}
+						else if (!i_frame)
+							store_frame = TRUE;
+
+						self->num_non_keyframes=0;
+
+						// extract time_inc
+						bitstream_init(&bit, data+pos, 0);
+						bitstream_get(&bit, 2); // skip coding_type
+						while(bitstream_get(&bit, 1));
+						bitstream_get(&bit, 1);
+						self->time_inc = bitstream_get(&bit, self->time_inc_bits);
+//						printf("\ntime_inc is %d\n", self->time_inc);
+
+						if (store_frame) {
+//							printf("store frame"\n");
+							self->prev_frame = buffer;
+							gst_buffer_ref (buffer);
+							return GST_FLOW_OK;
+						}
+					}
+					else {
+						cache_prev_frame = FALSE;
+//						printf(" I/P Frame without non key frame(s)!!\n");
+					}
+					break;
+				case 3: // S-Frame
+//					printf("S ");
+//					s_frame = TRUE;
+				case 2: // B-Frame
+//					if (!s_frame)
+//						printf("B ");
+					if (++self->num_non_keyframes == 1 && self->prev_frame) {
+//						printf("send grouped with prev P!\n");
+						commit_prev_frame_data = TRUE;
+					}
+					break;
+				case 4: // N-Frame
+				default:
+					printf("unhandled divx5/xvid frame type %d\n", (data[pos] & 0xC0) >> 6);
+					break;
+			}
+		}
+//		printf("\n");
+	}
+#endif
+
 	payload_len = data_len + pes_header_len - 6;
+
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	if (self->prev_frame && self->prev_frame != buffer) {
+		unsigned long long pts = GST_BUFFER_TIMESTAMP(self->prev_frame) * 9LL / 100000 /* convert ns to 90kHz */;
+		unsigned long long dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
+//		printf("use prev timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(self->prev_frame));
+
+		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
+		pes_header[10] = pts >> 22;
+		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
+		pes_header[12] = pts >> 7;
+		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
+
+		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
+		pes_header[15] = dts >> 22;
+		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
+		pes_header[17] = dts >> 7;
+		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
+	}
+
+	if (commit_prev_frame_data)
+		payload_len += GST_BUFFER_SIZE (self->prev_frame);
 
 	if (payload_len <= 0xFFFF) {
 		pes_header[4] = payload_len >> 8;
@@ -500,8 +770,29 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[4] = 0;
 		pes_header[5] = 0;
 	}
+#endif
 
 	write(self->fd, pes_header, pes_header_len);
+
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	if (commit_prev_frame_data) {
+//		printf("commit prev frame data\n");
+		write(self->fd, GST_BUFFER_DATA (self->prev_frame), GST_BUFFER_SIZE (self->prev_frame));
+	}
+
+	if (self->prev_frame && self->prev_frame != buffer) {
+//		printf("unref prev_frame buffer\n");
+		gst_buffer_unref(self->prev_frame);
+		self->prev_frame = NULL;
+	}
+
+	if (cache_prev_frame) {
+//		printf("cache prev frame\n");
+		gst_buffer_ref(buffer);
+		self->prev_frame = buffer;
+	}
+#endif
+
 	write(self->fd, data, data_len);
 
 	return GST_FLOW_OK;
@@ -563,6 +854,9 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		printf("MIMETYPE video/x-h263 VIDEO_SET_STREAMTYPE, 2\n");
 	} else if (!strcmp (mimetype, "video/x-xvid")) {
 		streamtype = 10;
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+		self->must_pack_bitstream = 1;
+#endif
 		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
 	} else if (!strcmp (mimetype, "video/x-divx")) {
 		gint divxversion;
@@ -608,6 +902,9 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 			break;
 			case 5:
 				streamtype = 15;
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+				self->must_pack_bitstream = 1;
+#endif
 				printf("MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15\n");
 			break;
 			default:
@@ -677,6 +974,11 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
+
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	if (self->prev_frame)
+		gst_buffer_unref(self->prev_frame);
+#endif
 
 	return TRUE;
 }
