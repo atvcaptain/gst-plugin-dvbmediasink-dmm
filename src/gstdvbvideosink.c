@@ -274,10 +274,11 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->divx311_header = NULL;
 	klass->must_send_header = FALSE;
 	klass->codec_data = NULL;
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	klass->must_pack_bitstream = 0;
 	klass->num_non_keyframes = 0;
 	klass->prev_frame = NULL;
-
+#endif
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
@@ -459,6 +460,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				continue;
 			if (data[pos++])
 				continue;
+			while (!data[pos])
+				++pos;
 			if (data[pos++] != 1)
 				continue;
 			if ((data[pos++] & 0xF0) == 0x20) { // we need time_inc_res
@@ -506,6 +509,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				continue;
 			if (data[pos++])
 				continue;
+			while (!data[pos])
+				++pos;
 			if (data[pos++] != 1)
 				continue;
 			if (data[pos++] != 0xB2)
@@ -641,6 +646,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				continue;
 			if (data[pos++])
 				continue;
+			while (!data[pos])
+				++pos;
 			if (data[pos++] != 1)
 				continue;
 			if (data[pos++] != 0xB6)
@@ -651,12 +658,11 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					cache_prev_frame = FALSE;
 					i_frame = TRUE;
 				case 1: // P-Frame
-//					printf("P ");
+//					if (!i_frame)
+//						printf("P ");
 					if (self->prev_frame != buffer) {
 						struct bitstream bit;
 						gboolean store_frame=FALSE;
-//						if (!i_frame)
-//							printf("P ");
 						if (self->prev_frame) {
 							if (!self->num_non_keyframes) {
 //								printf("no non keyframes...immediate commit prev frame\n");
@@ -668,7 +674,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 								store_frame = TRUE;
 							}
 							else {
-								struct bitstream bit;
 //								int i=-4;
 								pes_header[pes_header_len++] = 0;
 								pes_header[pes_header_len++] = 0;
@@ -685,7 +690,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //								printf(" insert pack frame %d non keyframes, time_inc %d, time_inc_bits %d -",
 //									self->num_non_keyframes, self->time_inc, self->time_inc_bits);
 //								for (; i < (bit.data - (pes_header+pes_header_len)); ++i)
-//									printf(" %02x", pes_header[pes_header_len+i];
+//									printf(" %02x", pes_header[pes_header_len+i]);
 //								printf("\nset data_len to 0!\n");
 								data_len = 0;
 								pes_header_len += bit.data - (pes_header+pes_header_len);
@@ -706,7 +711,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //						printf("\ntime_inc is %d\n", self->time_inc);
 
 						if (store_frame) {
-//							printf("store frame"\n");
+//							printf("store frame\n");
 							self->prev_frame = buffer;
 							gst_buffer_ref (buffer);
 							return GST_FLOW_OK;
@@ -761,6 +766,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	if (commit_prev_frame_data)
 		payload_len += GST_BUFFER_SIZE (self->prev_frame);
+#endif
 
 	if (payload_len <= 0xFFFF) {
 		pes_header[4] = payload_len >> 8;
@@ -770,7 +776,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[4] = 0;
 		pes_header[5] = 0;
 	}
-#endif
 
 	write(self->fd, pes_header, pes_header_len);
 
@@ -926,7 +931,7 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR);
-//	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
+//	self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
 
 	gint control_sock[2];
 
