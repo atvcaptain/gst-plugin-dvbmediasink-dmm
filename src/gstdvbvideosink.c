@@ -535,12 +535,11 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		/* do we have a timestamp? */
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
-		unsigned long long dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
 
 		pes_header[6] = 0x80;
-		pes_header[7] = 0xC0;
+		pes_header[7] = 0x80;
 		
-		pes_header[8] = 10;
+		pes_header[8] = 5;
 		
 		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
@@ -548,23 +547,17 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
 
-		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
-		pes_header[15] = dts >> 22;
-		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
-		pes_header[17] = dts >> 7;
-		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
-
-		pes_header_len = 19;
+		pes_header_len = 14;
 
 		if (self->divx311_header) {  // DIVX311 stuff
 			if (self->must_send_header) {
 				write(self->fd, self->divx311_header, 63);
 				self->must_send_header = FALSE;
 			}
-			pes_header[19] = 0;
-			pes_header[20] = 0;
-			pes_header[21] = 1;
-			pes_header[22] = 0xb6;
+			pes_header[14] = 0;
+			pes_header[15] = 0;
+			pes_header[16] = 1;
+			pes_header[17] = 0xb6;
 			pes_header_len += 4;
 		}
 		else if (self->codec_data) {  // MKV stuff
@@ -748,7 +741,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame && self->prev_frame != buffer) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(self->prev_frame) * 9LL / 100000 /* convert ns to 90kHz */;
-		unsigned long long dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
 //		printf("use prev timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(self->prev_frame));
 
 		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
@@ -756,12 +748,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
-
-		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
-		pes_header[15] = dts >> 22;
-		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
-		pes_header[17] = dts >> 7;
-		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
 	}
 
 	if (commit_prev_frame_data)
@@ -872,9 +858,8 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				#define B_GET_BITS(w,e,b)  (((w)>>(b))&(((unsigned)(-1))>>((sizeof(unsigned))*8-(e+1-b))))
 				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
 				static const guint8 brcm_divx311_sequence_header[] = {
-					0x00, 0x00, 0x01, 0xE0, 0x00, 0x39, 0x80, 0xC0, // PES HEADER
-					0x0A, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, 0xFF, // ..
-					0xFF, 0xFF, 0xFF, // ..
+					0x00, 0x00, 0x01, 0xE0, 0x00, 0x34, 0x80, 0x80, // PES HEADER
+					0x05, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 
 					0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x20, /* 0 .. 7 */
 					0x08, 0xC8, 0x0D, 0x40, 0x00, 0x53, 0x88, 0x40, /* 8 .. 15 */
 					0x0C, 0x40, 0x01, 0x90, 0x00, 0x97, 0x53, 0x0A, /* 16 .. 24 */
@@ -888,7 +873,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				gst_structure_get_int (structure, "width", &width);
 				memcpy(data, brcm_divx311_sequence_header, 63);
 				self->divx311_header = data;
-				data += 43;
+				data += 38;
 				data[0] = B_GET_BITS(width,11,4);
 				data[1] = B_SET_BITS("width [3..0]", B_GET_BITS(width,3,0), 7, 4) |
 					B_SET_BITS("'10'", 0x02, 3, 2) |

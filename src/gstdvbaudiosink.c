@@ -424,28 +424,21 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
 	{
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
-		unsigned long long dts = pts > 7508 ? pts - 7508 : pts; /* what to use as DTS-PTS offset? */
 
-		pes_header[4] = (size + 13) >> 8;
-		pes_header[5] = (size + 13) & 0xFF;
+		pes_header[4] = (size + 8) >> 8;
+		pes_header[5] = (size + 8) & 0xFF;
 		
 		pes_header[6] = 0x80;
-		pes_header[7] = 0xC0;
+		pes_header[7] = 0x80;
 		
-		pes_header[8] = 10;
+		pes_header[8] = 5;
 		
 		pes_header[9]	= 0x31 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
-		
-		pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
-		pes_header[15] = dts >> 22;
-		pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
-		pes_header[17] = dts >> 7;
-		pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
-		write(self->fd, pes_header, 19);
+		write(self->fd, pes_header, 14);
 	} else
 	{
 		pes_header[4] = (size + 3) >> 8;
