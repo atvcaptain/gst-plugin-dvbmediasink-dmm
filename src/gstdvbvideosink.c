@@ -223,7 +223,7 @@ gst_dvbvideosink_base_init (gpointer klass)
 	static GstElementDetails element_details = {
 		"A DVB video sink",
 		"Generic/DVBVideoSink",
-		"Outputs a MPEG2 or .H264 PES / ES into a DVB video device for hardware playback",
+		"Output video PES / ES into a DVB video device for hardware playback",
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
@@ -903,8 +903,9 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		}
 	}
 	if (streamtype != -1) {
-		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0)
-			GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
+		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0 )
+			if ( streamtype != 0 && streamtype != 6 )
+				GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
 	} else
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", mimetype));
 
