@@ -433,7 +433,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		
 		pes_header[8] = 5;
 		
-		pes_header[9]	= 0x31 | ((pts >> 29) & 0xE);
+		pes_header[9]  = 0x21 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;

@@ -541,7 +541,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		
 		pes_header[8] = 5;
 		
-		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
+		pes_header[9] =  0x21 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
@@ -743,7 +743,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(self->prev_frame) * 9LL / 100000 /* convert ns to 90kHz */;
 //		printf("use prev timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(self->prev_frame));
 
-		pes_header[9] = 0x31 | ((pts >> 29) & 0xE);
+		pes_header[9] =  0x21 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
@@ -859,7 +859,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
 				static const guint8 brcm_divx311_sequence_header[] = {
 					0x00, 0x00, 0x01, 0xE0, 0x00, 0x34, 0x80, 0x80, // PES HEADER
-					0x05, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 
+					0x05, 0x2F, 0xFF, 0xFF, 0xFF, 0xFF, 
 					0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x20, /* 0 .. 7 */
 					0x08, 0xC8, 0x0D, 0x40, 0x00, 0x53, 0x88, 0x40, /* 8 .. 15 */
 					0x0C, 0x40, 0x01, 0x90, 0x00, 0x97, 0x53, 0x0A, /* 16 .. 24 */
