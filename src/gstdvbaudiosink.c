@@ -539,7 +539,7 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 	{
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
 		ioctl(self->fd, AUDIO_PLAY);
-		ioctl(self->fd, AUDIO_SET_BYPASS_MODE, 0);
+//		ioctl(self->fd, AUDIO_SET_BYPASS_MODE, 0);
 	}
 	return TRUE;
 	/* ERRORS */
