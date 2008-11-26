@@ -194,10 +194,12 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass,
 		GstDVBAudioSinkClass * gclass)
 {
 	GstPad *pad = GST_BASE_SINK_PAD (klass);
-	
+
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbaudiosink_query));
-	
+
 	klass->silent = FALSE;
+	klass->aac_adts_header_valid = FALSE;
+
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
@@ -298,9 +300,36 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				printf("MIMETYPE %s version %d\n",type,mpegversion);
 				break;
 			case 4:
+			{
+				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+				printf("MIMETYPE %s version %d (AAC)\n", type, mpegversion);
+				if (codec_data) {
+					guint8 *h = GST_BUFFER_DATA(gst_value_get_buffer (codec_data));
+					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
+					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
+					guint8 channels = (h[1] & 0x78) >> 3;
+					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+						obj_type, rate_idx, channels);
+					/* Sync point over a full byte */
+					self->aac_adts_header[0] = 0xFF;
+					/* Sync point continued over first 4 bits + static 4 bits
+					 * (ID, layer, protection)*/
+					self->aac_adts_header[1] = 0xF1;
+					/* Object type over first 2 bits */
+					self->aac_adts_header[2] = obj_type << 6;
+					/* rate index over next 4 bits */
+					self->aac_adts_header[2] |= rate_idx << 2;
+					/* channels over last 2 bits */
+					self->aac_adts_header[2] |= (channels & 0x4) >> 2;
+					/* channels continued over next 2 bits + 4 bits at zero */
+					self->aac_adts_header[3] = (channels & 0x3) << 6;
+					self->aac_adts_header_valid = TRUE;
+				}
+				else
+					printf("no codec data!!!\n");
 				bypass = 8;
-				printf("MIMETYPE %s version %d (AAC)\n",type,mpegversion);
 				break;
+			}
 			default:
 				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled mpeg version %i", mpegversion));
 				break;
@@ -364,13 +393,14 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 static GstFlowReturn
 gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
-	unsigned char pes_header[19];
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
+	unsigned char pes_header[64];
 	int skip = self->skip;
 	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
 	fd_set readfds;
 	fd_set writefds;
 	gint retval;
+	size_t pes_header_size;
 
 //	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
 
@@ -419,7 +449,9 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	pes_header[2] = 1;
 	pes_header[3] = 0xC0;
 
-#if 1
+	if (self->aac_adts_header_valid)
+		size += 7;
+
 		/* do we have a timestamp? */
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
 	{
@@ -438,7 +470,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
-		write(self->fd, pes_header, 14);
+		pes_header_size = 14;
 	} else
 	{
 		pes_header[4] = (size + 3) >> 8;
@@ -446,10 +478,27 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header[6] = 0x80;
 		pes_header[7] = 0x00;
 		pes_header[8] = 0;
-		write(self->fd, pes_header, 9);
+		pes_header_size = 9;
 	}
-#endif
 
+	if (self->aac_adts_header_valid) {
+		self->aac_adts_header[3] &= 0xC0;
+		/* frame size over last 2 bits */
+		self->aac_adts_header[3] |= (size & 0x1800) >> 11;
+		/* frame size continued over full byte */
+		self->aac_adts_header[4] = (size & 0x1FF8) >> 3;
+		/* frame size continued first 3 bits */
+		self->aac_adts_header[5] = (size & 7) << 5;
+		/* buffer fullness (0x7FF for VBR) over 5 last bits */
+		self->aac_adts_header[5] |= 0x1F;
+		/* buffer fullness (0x7FF for VBR) continued over 6 first bits + 2 zeros for
+		 * number of raw data blocks */
+		self->aac_adts_header[6] = 0xFC;
+		memcpy(pes_header + pes_header_size, self->aac_adts_header, 7);
+		pes_header_size += 7;
+	}
+
+	write(self->fd, pes_header, pes_header_size);
 	write(self->fd, GST_BUFFER_DATA (buffer) + skip, GST_BUFFER_SIZE (buffer) - skip);
 
 	return GST_FLOW_OK;
@@ -512,6 +561,7 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_DEMUX);
 		close(self->fd);
 	}
+
 	return TRUE;
 }
 

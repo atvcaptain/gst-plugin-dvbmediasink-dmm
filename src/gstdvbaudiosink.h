@@ -70,6 +70,8 @@ typedef struct _GstDVBAudioSinkClass GstDVBAudioSinkClass;
 struct _GstDVBAudioSink
 {
 	GstBaseSink element;
+	guint8 aac_adts_header[7];
+	gboolean aac_adts_header_valid;
 
 	gint control_sock[2];
 
