@@ -69,6 +69,8 @@ G_BEGIN_DECLS
 typedef struct _GstDVBVideoSink      GstDVBVideoSink;
 typedef struct _GstDVBVideoSinkClass GstDVBVideoSinkClass;
 
+typedef enum { CDT_H264 = 0, CDT_MPEG4_PART2 = 1 } t_codec_data_type;
+
 struct _GstDVBVideoSink
 {
 	GstBaseSink element;
@@ -78,6 +80,7 @@ struct _GstDVBVideoSink
 	gboolean silent, must_send_header;
 
 	GstBuffer *codec_data;
+	t_codec_data_type codec_data_type;
 
 	guint8 *divx311_header;
 

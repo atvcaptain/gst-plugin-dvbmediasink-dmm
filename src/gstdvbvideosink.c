@@ -274,6 +274,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->divx311_header = NULL;
 	klass->must_send_header = FALSE;
 	klass->codec_data = NULL;
+	klass->codec_data_type = CDT_H264;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	klass->must_pack_bitstream = 0;
 	klass->num_non_keyframes = 0;
@@ -560,7 +561,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			pes_header[17] = 0xb6;
 			pes_header_len += 4;
 		}
-		else if (self->codec_data) {  // MKV stuff
+		else if (self->codec_data && self->codec_data_type == CDT_H264) {  // MKV stuff
 			unsigned int pos = 0;
 			while(TRUE) {
 				unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
@@ -617,6 +618,15 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				}
 				else
 					printf("codec_data to short(1)!\n");
+				self->must_send_header = FALSE;
+			}
+		}
+		else if (self->codec_data && self->codec_data_type == CDT_MPEG4_PART2) {
+			if (self->must_send_header) {
+				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
+				unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
+				memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
+				pes_header_len += codec_data_len;
 				self->must_send_header = FALSE;
 			}
 		}
@@ -823,8 +833,18 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				printf("MIMETYPE video/mpeg2 -> VIDEO_SET_STREAMTYPE, 0\n");
 			break;
 			case 4:
+			{
+				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+				if (codec_data) {
+					printf("MPEG4 have codec data\n");
+					self->codec_data = gst_value_get_buffer (codec_data);
+					self->codec_data_type = CDT_MPEG4_PART2;
+					gst_buffer_ref (self->codec_data);
+					self->must_send_header = TRUE;
+				}
 				streamtype = 4;
 				printf("MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4\n");
+			}
 			break;
 			default:
 				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled mpeg version %i", mpegversion));
@@ -834,11 +854,11 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
 		streamtype = 1;
 		if (codec_data) {
-			printf("H264 have codec data.. force mkv!\n");
+			printf("H264 have codec data..!\n");
 			self->codec_data = gst_value_get_buffer (codec_data);
 			gst_buffer_ref (self->codec_data);
+			self->must_send_header = TRUE;
 		}
-		self->must_send_header = TRUE;
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
 	} else if (!strcmp (mimetype, "video/x-h263")) {
 		streamtype = 2;
