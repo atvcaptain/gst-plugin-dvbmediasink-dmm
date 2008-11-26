@@ -601,7 +601,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //							printf("4 %d bytes\n", len);
 							pos += 3;
 							if (codec_data_len >= (pos+len)) {
-								printf("codec data ok!\n");
+//								printf("codec data ok!\n");
 								memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
 								pes_header_len += 4;
 								memcpy(pes_header+pes_header_len, codec_data+pos, len);

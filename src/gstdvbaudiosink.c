@@ -308,8 +308,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
 					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
 					guint8 channels = (h[1] & 0x78) >> 3;
-					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-						obj_type, rate_idx, channels);
+//					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+//						obj_type, rate_idx, channels);
 					/* Sync point over a full byte */
 					self->aac_adts_header[0] = 0xFF;
 					/* Sync point continued over first 4 bits + static 4 bits
