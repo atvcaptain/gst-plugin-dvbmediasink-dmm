@@ -504,6 +504,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	}
 
 	if (self->must_pack_bitstream == 1) {
+		int tmp1, tmp2;
+		unsigned char c1, c2;
 		unsigned int pos = 0;
 		while(pos < data_len) {
 			if (data[pos++])
@@ -518,8 +520,10 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				continue;
 			if (data_len - pos < 13)
 				break;
-			if (!strcmp((char*)data+pos, "DivX503b1393p"))
+			if (sscanf((char*)data+pos, "DivX%d%c%d%cp", &tmp1, &c1, &tmp2, &c2) == 4 && (c1 == 'b' || c1 == 'B') && (c2 == 'p' || c2 == 'P')) {
+				printf("%s seen... already packed!\n", (char*)data+pos);
 				self->must_pack_bitstream = 0;
+			}
 //			if (self->must_pack_bitstream)
 //				printf("pack needed\n");
 //			else
