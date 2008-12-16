@@ -465,22 +465,24 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		{
 			if (evt.type == VIDEO_EVENT_SIZE_CHANGED)
 			{
-				s = gst_structure_new ("eventSizeChanged", "aspect_ratio", G_TYPE_INT,
-				evt.u.size.aspect_ratio, "width", G_TYPE_INT, evt.u.size.w, "height", G_TYPE_INT, evt.u.size.h, NULL);
+				s = gst_structure_new ("eventSizeChanged",
+					"aspect_ratio", G_TYPE_INT, evt.u.size.aspect_ratio == 0 ? 2 : 3,
+					"width", G_TYPE_INT, evt.u.size.w,
+					"height", G_TYPE_INT, evt.u.size.h, NULL);
 				msg = gst_message_new_element (GST_OBJECT (sink), s);
 				gst_element_post_message (GST_ELEMENT (sink), msg);
 			}
 			else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED)
 			{
-				s = gst_structure_new ("eventFrameRateChanged", "frame_rate", G_TYPE_INT,
-				evt.u.frame_rate, NULL);
+				s = gst_structure_new ("eventFrameRateChanged",
+					"frame_rate", G_TYPE_INT, evt.u.frame_rate, NULL);
 				msg = gst_message_new_element (GST_OBJECT (sink), s);
 				gst_element_post_message (GST_ELEMENT (sink), msg);
 			}
 			else if (evt.type == 16 /*VIDEO_EVENT_PROGRESSIVE_CHANGED*/)
 			{
-				s = gst_structure_new ("eventProgressiveChanged", "progressive", G_TYPE_INT,
-				evt.u.frame_rate, NULL);
+				s = gst_structure_new ("eventProgressiveChanged",
+					"progressive", G_TYPE_INT, evt.u.frame_rate, NULL);
 				msg = gst_message_new_element (GST_OBJECT (sink), s);
 				gst_element_post_message (GST_ELEMENT (sink), msg);
 			}
@@ -976,6 +978,44 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 	return TRUE;
 }
 
+static int readMpegProc(char *str, int decoder)
+{
+	int val = -1;
+	char tmp[64];
+	sprintf(tmp, "/proc/stb/vmpeg/%d/%s", decoder, str);
+	FILE *f = fopen(tmp, "r");
+	if (f)
+	{
+		fscanf(f, "%x", &val);
+		fclose(f);
+	}
+	return val;
+}
+
+static int readApiSize(int fd, int *xres, int *yres, int *aspect)
+{
+	video_size_t size;
+	if (!ioctl(fd, VIDEO_GET_SIZE, &size))
+	{
+		*xres = size.w;
+		*yres = size.h;
+		*aspect = size.aspect_ratio == 0 ? 2 : 3;  // convert dvb api to etsi
+		return 0;
+	}
+	return -1;
+}
+
+static int readApiFrameRate(int fd, int *framerate)
+{
+	unsigned int frate;
+	if (!ioctl(fd, VIDEO_GET_FRAME_RATE, &frate))
+	{
+		*framerate = frate;
+		return 0;
+	}
+	return -1;
+}
+
 static gboolean
 gst_dvbvideosink_start (GstBaseSink * basesink)
 {
@@ -996,6 +1036,39 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 
 	if (self->fd >= 0)
 	{
+		GstStructure *s = 0;
+		GstMessage *msg = 0;
+		int aspect = -1, width = -1, height = -1, framerate = -1,
+			progressive = readMpegProc("progressive", 0);
+
+		if (readApiSize(self->fd, &width, &height, &aspect) == -1)
+		{
+			aspect = readMpegProc("aspect", 0);
+			width = readMpegProc("xres", 0);
+			height = readMpegProc("yres", 0);
+		}
+		else
+			aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
+		if (readApiFrameRate(self->fd, &framerate) == -1)
+			framerate = readMpegProc("framerate", 0);
+
+		s = gst_structure_new ("eventSizeAvail",
+			"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
+			"width", G_TYPE_INT, width,
+			"height", G_TYPE_INT, height, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
+		s = gst_structure_new ("eventFrameRateAvail",
+			"frame_rate", G_TYPE_INT, framerate, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
+		s = gst_structure_new ("eventProgressiveAvail",
+			"progressive", G_TYPE_INT, progressive, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
 		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
 		ioctl(self->fd, VIDEO_PLAY);
 	}
