@@ -404,6 +404,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned int payload_len=0;
 	fd_set readfds;
 	fd_set writefds;
+	fd_set priofds;
 	gint retval;
 //	int i=0;
 
@@ -423,11 +424,14 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	FD_ZERO (&writefds);
 	FD_SET (self->fd, &writefds);
-	
+
+	FD_ZERO (&priofds);
+	FD_SET (self->fd, &priofds);
+
 	do {
 		GST_DEBUG_OBJECT (self, "going into select, have %d bytes to write",
 				data_len);
-		retval = select (FD_SETSIZE, &readfds, &writefds, NULL, NULL);
+		retval = select (FD_SETSIZE, &readfds, &writefds, &priofds, NULL);
 	} while ((retval == -1 && errno == EINTR));
 
 	if (retval == -1)
@@ -447,6 +451,42 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			}
 		}
 		goto stopped;
+	}
+
+	if (FD_ISSET (self->fd, &priofds))
+	{
+		GstStructure *s;
+		GstMessage *msg;
+
+		struct video_event evt;
+		if (ioctl(self->fd, VIDEO_GET_EVENT, &evt) < 0)
+			g_warning ("failed to ioctl VIDEO_GET_EVENT!");
+		else
+		{
+			if (evt.type == VIDEO_EVENT_SIZE_CHANGED)
+			{
+				s = gst_structure_new ("eventSizeChanged", "aspect_ratio", G_TYPE_INT,
+				evt.u.size.aspect_ratio, "width", G_TYPE_INT, evt.u.size.w, "height", G_TYPE_INT, evt.u.size.h, NULL);
+				msg = gst_message_new_element (GST_OBJECT (sink), s);
+				gst_element_post_message (GST_ELEMENT (sink), msg);
+			}
+			else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED)
+			{
+				s = gst_structure_new ("eventFrameRateChanged", "frame_rate", G_TYPE_INT,
+				evt.u.frame_rate, NULL);
+				msg = gst_message_new_element (GST_OBJECT (sink), s);
+				gst_element_post_message (GST_ELEMENT (sink), msg);
+			}
+			else if (evt.type == 16 /*VIDEO_EVENT_PROGRESSIVE_CHANGED*/)
+			{
+				s = gst_structure_new ("eventProgressiveChanged", "progressive", G_TYPE_INT,
+				evt.u.frame_rate, NULL);
+				msg = gst_message_new_element (GST_OBJECT (sink), s);
+				gst_element_post_message (GST_ELEMENT (sink), msg);
+			}
+			else
+				g_warning ("unhandled DVBAPI Video Event %d", evt.type);
+		}
 	}
 
 	if (self->fd < 0)
@@ -929,7 +969,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 	if (streamtype != -1) {
 		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0 )
 			if ( streamtype != 0 && streamtype != 6 )
-				GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
+				GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
 	} else
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", mimetype));
 
@@ -1009,7 +1049,7 @@ static gboolean
 plugin_init (GstPlugin *plugin)
 {
 	return gst_element_register (plugin, "dvbvideosink",
-						 GST_RANK_NONE,
+						 GST_RANK_PRIMARY,
 						 GST_TYPE_DVBVIDEOSINK);
 }
 

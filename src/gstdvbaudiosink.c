@@ -576,7 +576,7 @@ static gboolean
 plugin_init (GstPlugin *plugin)
 {
 	return gst_element_register (plugin, "dvbaudiosink",
-						 GST_RANK_NONE,
+						 GST_RANK_PRIMARY,
 						 GST_TYPE_DVBAUDIOSINK);
 }
 
