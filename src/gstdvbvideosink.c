@@ -180,11 +180,10 @@ GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("video/mpeg, "
+	GST_STATIC_CAPS (
+		"video/mpeg, "
 		"mpegversion = (int) { 1, 2, 4 }, "
 		"systemstream = (boolean) false, "
-	COMMON_VIDEO_CAPS "; "
-		"video/x-wmv, "
 	COMMON_VIDEO_CAPS "; "
 		"video/x-h264, "
 	COMMON_VIDEO_CAPS "; "
@@ -192,7 +191,8 @@ GST_STATIC_PAD_TEMPLATE (
 	COMMON_VIDEO_CAPS "; "
 		"video/x-divx, "
 	COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
-		"video/x-xvid, " COMMON_VIDEO_CAPS )
+		"video/x-xvid, "
+	COMMON_VIDEO_CAPS "; ")
 );
 
 #define DEBUG_INIT(bla) \
@@ -271,10 +271,9 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_query));
 	
 	klass->silent = FALSE;
-	klass->divx311_header = NULL;
-	klass->must_send_header = FALSE;
+	klass->must_send_header = TRUE;
 	klass->codec_data = NULL;
-	klass->codec_data_type = CDT_H264;
+	klass->codec_type = CT_H264;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	klass->must_pack_bitstream = 0;
 	klass->num_non_keyframes = 0;
@@ -596,84 +595,42 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		pes_header_len = 14;
 
-		if (self->divx311_header) {  // DIVX311 stuff
-			if (self->must_send_header) {
-				write(self->fd, self->divx311_header, 63);
-				self->must_send_header = FALSE;
-			}
-			pes_header[14] = 0;
-			pes_header[15] = 0;
-			pes_header[16] = 1;
-			pes_header[17] = 0xb6;
-			pes_header_len += 4;
-		}
-		else if (self->codec_data && self->codec_data_type == CDT_H264) {  // MKV stuff
-			unsigned int pos = 0;
-			while(TRUE) {
-				unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
-//				printf("patch %02x %02x %02x %02x\n",
-//					data[pos],
-//					data[pos + 1],
-//					data[pos + 2],
-//					data[pos + 3]);
-				memcpy(data+pos, "\x00\x00\x00\x01", 4);
-//				printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
-				pos += 4;
-				if ((pos + pack_len) >= data_len)
-					break;
-				pos += pack_len;
-			}
+		if (self->codec_data) {
 			if (self->must_send_header) {
 				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 				unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
-				unsigned int pos=0;
-//				printf("1\n");
-				if (codec_data_len > 7) {
-					unsigned short len = (codec_data[6] << 8) | codec_data[7];
-//					printf("2 %d bytes\n", len);
-					if (codec_data_len >= (len + 8)) {
-//						printf("3\n");
-						memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
-						pes_header_len += 4;
-						memcpy(pes_header+pes_header_len, codec_data+8, len);
-						if (!memcmp(pes_header+pes_header_len, "\x67\x64\x00", 3)) {
-							pes_header[pes_header_len+3] = 0x29; // hardcode h264 level 4.1
-							printf("h264 level patched!\n");
-						}
-						pes_header_len += len;
-						pos = 8 + len;
-						if (codec_data_len > (pos + 2)) {
-							len = (codec_data[pos+1] << 8) | codec_data[pos+2];
-//							printf("4 %d bytes\n", len);
-							pos += 3;
-							if (codec_data_len >= (pos+len)) {
-//								printf("codec data ok!\n");
-								memcpy(pes_header+pes_header_len, "\x00\x00\x00\x01", 4);
-								pes_header_len += 4;
-								memcpy(pes_header+pes_header_len, codec_data+pos, len);
-								pes_header_len += len;
-							}
-							else
-								printf("codec_data to short(4)\n");
-						}
-						else
-							printf("codec_data to short(3)!\n");
-					}
-					else
-						printf("codec_data to short(2)!\n");
+				if (self->codec_type == CT_DIVX311)
+					write(self->fd, codec_data, codec_data_len);
+				else {
+					memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
+					pes_header_len += codec_data_len;
 				}
-				else
-					printf("codec_data to short(1)!\n");
 				self->must_send_header = FALSE;
 			}
-		}
-		else if (self->codec_data && self->codec_data_type == CDT_MPEG4_PART2) {
-			if (self->must_send_header) {
-				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
-				unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
-				memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
-				pes_header_len += codec_data_len;
-				self->must_send_header = FALSE;
+			if (self->codec_type == CT_H264) {  // MKV stuff
+				unsigned int pos = 0;
+				while(TRUE) {
+					unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
+//					printf("patch %02x %02x %02x %02x\n",
+//						data[pos],
+//						data[pos + 1],
+//						data[pos + 2],
+//						data[pos + 3]);
+					memcpy(data+pos, "\x00\x00\x00\x01", 4);
+//					printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
+					pos += 4;
+					if ((pos + pack_len) >= data_len)
+						break;
+					pos += pack_len;
+				}
+			}
+			else if (self->codec_type == CT_MPEG4_PART2) {
+				memcpy(pes_header+pes_header_len, "\x00\x00\x01", 3);
+				pes_header_len += 3;
+			}
+			else if (self->codec_type == CT_DIVX311) {
+				memcpy(pes_header+pes_header_len, "\x00\x00\x01\xb6", 4);
+				pes_header_len += 4;
 			}
 		}
 	}
@@ -884,9 +841,8 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				if (codec_data) {
 					printf("MPEG4 have codec data\n");
 					self->codec_data = gst_value_get_buffer (codec_data);
-					self->codec_data_type = CDT_MPEG4_PART2;
+					self->codec_type = CT_MPEG4_PART2;
 					gst_buffer_ref (self->codec_data);
-					self->must_send_header = TRUE;
 				}
 				streamtype = 4;
 				printf("MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4\n");
@@ -897,13 +853,61 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 			break;
 		}
 	} else if (!strcmp (mimetype, "video/x-h264")) {
-		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+		const GValue *cd_data = gst_structure_get_value (structure, "codec_data");
 		streamtype = 1;
-		if (codec_data) {
+		if (cd_data) {
+			unsigned char tmp[2048];
+			unsigned int tmp_len = 0;
+			GstBuffer *codec_data = gst_value_get_buffer (cd_data);
+			unsigned char *data = GST_BUFFER_DATA (codec_data);
+			unsigned int cd_len = GST_BUFFER_SIZE (codec_data);
+			unsigned int cd_pos = 0;
 			printf("H264 have codec data..!\n");
-			self->codec_data = gst_value_get_buffer (codec_data);
-			gst_buffer_ref (self->codec_data);
-			self->must_send_header = TRUE;
+//			printf("1\n");
+			if (cd_len > 7) {
+				unsigned short len = (data[6] << 8) | data[7];
+//				printf("2 %d bytes\n", len);
+				if (cd_len >= (len + 8)) {
+//					int i=0;
+//					printf("3\n");
+					memcpy(tmp, "\x00\x00\x00\x01", 4);
+					tmp_len += 4;
+//					printf("header part1 ");
+//					for (i = 0; i < len; ++i)
+//						printf("%02x ", data[8+i]);
+//					printf("\n");
+					memcpy(tmp+tmp_len, data+8, len);
+					if (!memcmp(tmp+tmp_len, "\x67\x64\x00", 3)) {
+						tmp[tmp_len+3] = 0x29; // hardcode h264 level 4.1
+						printf("h264 level patched!\n");
+					}
+					tmp_len += len;
+					cd_pos = 8 + len;
+					if (cd_len > (cd_pos + 2)) {
+						len = (data[cd_pos+1] << 8) | data[cd_pos+2];
+//						printf("4 %d bytes\n", len);
+						cd_pos += 3;
+						if (cd_len >= (cd_pos+len)) {
+//							printf("codec data ok!\n");
+							memcpy(tmp+tmp_len, "\x00\x00\x00\x01", 4);
+							tmp_len += 4;
+//							printf("header part2 %02x %02x %02x %02x ... %d bytes\n", data[cd_pos], data[cd_pos+1], data[cd_pos+2], data[cd_pos+3], len);
+							memcpy(tmp+tmp_len, data+cd_pos, len);
+							tmp_len += len;
+							self->codec_data = gst_buffer_new_and_alloc(tmp_len);
+							memcpy(GST_BUFFER_DATA(self->codec_data), tmp, tmp_len);
+						}
+						else
+							printf("codec_data to short(4)\n");
+					}
+					else
+						printf("codec_data to short(3)!\n");
+				}
+				else
+					printf("codec_data to short(2)!\n");
+			}
+			else
+				printf("codec_data to short(1)!\n");
 		}
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
 	} else if (!strcmp (mimetype, "video/x-h263")) {
@@ -933,12 +937,12 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 					0x30, 0x7F, 0x00, 0x00, 0x01, 0xB2, 0x44, 0x69, /* 0 .. 7 */
 					0x76, 0x58, 0x33, 0x31, 0x31, 0x41, 0x4E, 0x44  /* 8 .. 15 */
 				};
-				guint8 *data = malloc(63);
+				self->codec_data = gst_buffer_new_and_alloc(63);
+				guint8 *data = GST_BUFFER_DATA(self->codec_data);
 				gint height, width;
 				gst_structure_get_int (structure, "height", &height);
 				gst_structure_get_int (structure, "width", &width);
 				memcpy(data, brcm_divx311_sequence_header, 63);
-				self->divx311_header = data;
 				data += 38;
 				data[0] = B_GET_BITS(width,11,4);
 				data[1] = B_SET_BITS("width [3..0]", B_GET_BITS(width,3,0), 7, 4) |
@@ -948,7 +952,7 @@ gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
 				data[3]= B_SET_BITS("height [1.0]", B_GET_BITS(height,1,0), 7, 6) |
 					B_SET_BITS("'100000'", 0x20, 5, 0);
 				streamtype = 13;
-				self->must_send_header = TRUE;
+				self->codec_type = CT_DIVX311;
 				printf("MIMETYPE video/x-divx vers. 3 -> VIDEO_SET_STREAMTYPE, 13\n");
 			}
 			break;
@@ -1096,9 +1100,6 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
-
-	if (self->divx311_header)
-		free(self->divx311_header);
 
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
