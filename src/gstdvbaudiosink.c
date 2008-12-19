@@ -95,6 +95,10 @@ G_STMT_START {																 \
 
 #include "gstdvbaudiosink.h"
 
+#ifndef AUDIO_GET_PTS
+#define AUDIO_GET_PTS              _IOR('o', 19, gint64)
+#endif
+
 GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
 #define GST_CAT_DEFAULT dvbaudiosink_debug
 
@@ -138,7 +142,7 @@ static gboolean gst_dvbaudiosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
-static gboolean gst_dvbaudiosink_query (GstPad * pad, GstQuery * query);
+static gboolean gst_dvbaudiosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 
@@ -182,6 +186,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
+	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 }
 
 /* initialize the new element
@@ -193,10 +198,6 @@ static void
 gst_dvbaudiosink_init (GstDVBAudioSink *klass,
 		GstDVBAudioSinkClass * gclass)
 {
-	GstPad *pad = GST_BASE_SINK_PAD (klass);
-
-	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbaudiosink_query));
-
 	klass->silent = FALSE;
 	klass->aac_adts_header_valid = FALSE;
 
@@ -243,15 +244,36 @@ gst_dvbaudiosink_get_property (GObject *object, guint prop_id,
 }
 
 static gboolean
-gst_dvbaudiosink_query (GstPad * pad, GstQuery * query)
+gst_dvbaudiosink_query (GstElement * element, GstQuery * query)
 {
-	GstDVBAudioSink *self;
-//	GstFormat format;
-	
-	self = GST_DVBAUDIOSINK (GST_PAD_PARENT (pad));
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
+
+//	printf("query %d %d\n", GST_QUERY_TYPE(query), GST_QUERY_POSITION);
+
 	switch (GST_QUERY_TYPE (query)) {
+	case GST_QUERY_POSITION:
+	{
+		gint64 cur = 0;
+		GstFormat format;
+
+		gst_query_parse_position (query, &format, NULL);
+
+		if (format != GST_FORMAT_TIME)
+			goto query_default;
+
+		ioctl(self->fd, AUDIO_GET_PTS, &cur);
+//		printf("PTS: %08llx", cur);
+
+		cur *= 11111;
+
+		gst_query_set_position (query, format, cur);
+
+		GST_DEBUG_OBJECT (self, "position format %d", format);
+		return TRUE;
+	}
 	default:
-		return gst_pad_query_default (pad, query);
+query_default:
+		return GST_ELEMENT_CLASS (parent_class)->query (element, query);
 	}
 }
 
@@ -268,16 +290,9 @@ static gboolean
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
-
-	GstStructure *structure;
-	const char *type;
-	int bypass;
-	
-	if (self->fd < 0)
-		return FALSE;
-	
-	structure = gst_caps_get_structure (caps, 0);	
-	type = gst_structure_get_name (structure);
+	GstStructure *structure = gst_caps_get_structure (caps, 0);
+	const char *type = gst_structure_get_name (structure);
+	int bypass = -1;
 
 	self->skip = 0;
 	if (!strcmp(type, "audio/mpeg")) {
@@ -340,6 +355,17 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		printf("MIMETYPE %s\n",type);
 		bypass = 0;
 	}
+	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
+	{
+		printf("MIMETYPE %s\n",type);
+		bypass = 2;
+	}
+	else if (!strcmp(type, "audio/x-private1-dts"))
+	{
+		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
+		bypass = 2;
+		self->skip = 2;
+	}
 	else if (!strcmp(type, "audio/x-private1-ac3"))
 	{
 		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
@@ -401,8 +427,13 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	fd_set writefds;
 	gint retval;
 	size_t pes_header_size;
+//	int i=0;
 
-//	printf("write %d, timestamp: %08llx\n", GST_BUFFER_SIZE (buffer), (long long)GST_BUFFER_TIMESTAMP(buffer));
+//	for (;i < (size > 0x1F ? 0x1F : size); ++i)
+//		printf("%02x ", data[i]);
+//	printf("%d bytes\n", size);
+
+//	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	if ( !bypass_set )
 	{

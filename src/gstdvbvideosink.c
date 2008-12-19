@@ -213,8 +213,8 @@ static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
-static gboolean gst_dvbvideosink_query (GstPad * pad, GstQuery * query);
-static gboolean gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps);
+static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
+static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 
 static void
@@ -254,6 +254,8 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbvideosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbvideosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
+	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
+	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
 
 /* initialize the new element
@@ -265,11 +267,6 @@ static void
 gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		GstDVBVideoSinkClass * gclass)
 {
-	GstPad *pad = GST_BASE_SINK_PAD (klass);
-	
-	gst_pad_set_setcaps_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps));
-	gst_pad_set_query_function (pad, GST_DEBUG_FUNCPTR (gst_dvbvideosink_query));
-	
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
 	klass->codec_data = NULL;
@@ -322,12 +319,12 @@ gst_dvbvideosink_get_property (GObject *object, guint prop_id,
 }
 
 static gboolean
-gst_dvbvideosink_query (GstPad * pad, GstQuery * query)
+gst_dvbvideosink_query (GstElement * element, GstQuery * query)
 {
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
-//	GstFormat format;
-	
-	printf("QUERY: type: %d\n", GST_QUERY_TYPE(query));
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (element);
+
+//	printf("QUERY: type: %d (%d)\n", GST_QUERY_TYPE(query), GST_QUERY_POSITION);
+
 	switch (GST_QUERY_TYPE (query)) {
 	case GST_QUERY_POSITION:
 	{
@@ -335,22 +332,23 @@ gst_dvbvideosink_query (GstPad * pad, GstQuery * query)
 		GstFormat format;
 
 		gst_query_parse_position (query, &format, NULL);
-		
+
 		if (format != GST_FORMAT_TIME)
-			return gst_pad_query_default (pad, query);
+			goto query_default;
 
 		ioctl(self->fd, VIDEO_GET_PTS, &cur);
-		printf("PTS: %08llx", cur);
-		
+//		printf("PTS: %08llx", cur);
+
 		cur *= 11111;
-		
+
 		gst_query_set_position (query, format, cur);
 		
 		GST_DEBUG_OBJECT (self, "position format %d", format);
 		return TRUE;
 	}
 	default:
-		return gst_pad_query_default (pad, query);
+query_default:
+		return GST_ELEMENT_CLASS (parent_class)->query (element, query);
 	}
 }
 
@@ -816,11 +814,11 @@ stopped:
 }
 
 static gboolean 
-gst_dvbvideosink_set_caps (GstPad * pad, GstCaps * vscaps)
+gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
-	GstStructure *structure = gst_caps_get_structure (vscaps, 0);
-	const gchar *mimetype = gst_structure_get_name (structure);
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (GST_PAD_PARENT (pad));
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	GstStructure *structure = gst_caps_get_structure (caps, 0);
+	const char *mimetype = gst_structure_get_name (structure);
 	int streamtype = -1;
 
 	if (!strcmp (mimetype, "video/mpeg")) {
