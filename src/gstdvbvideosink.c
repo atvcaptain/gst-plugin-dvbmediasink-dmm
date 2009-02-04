@@ -185,6 +185,8 @@ GST_STATIC_PAD_TEMPLATE (
 		"mpegversion = (int) { 1, 2, 4 }, "
 		"systemstream = (boolean) false, "
 	COMMON_VIDEO_CAPS "; "
+		"video/x-msmpeg, "
+	COMMON_VIDEO_CAPS ", mspegversion = (int) 43; "
 		"video/x-h264, "
 	COMMON_VIDEO_CAPS "; "
 		"video/x-h263, "
@@ -917,11 +919,13 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		self->must_pack_bitstream = 1;
 #endif
 		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
-	} else if (!strcmp (mimetype, "video/x-divx")) {
-		gint divxversion;
-		gst_structure_get_int (structure, "divxversion", &divxversion);
+	} else if (!strcmp (mimetype, "video/x-divx") || !strcmp (mimetype, "video/x-msmpeg")) {
+		gint divxversion = -1;
+		if (!gst_structure_get_int (structure, "divxversion", &divxversion) && !gst_structure_get_int (structure, "msmpegversion", &divxversion))
+			;
 		switch (divxversion) {
 			case 3:
+			case 43:
 			{
 				#define B_GET_BITS(w,e,b)  (((w)>>(b))&(((unsigned)(-1))>>((sizeof(unsigned))*8-(e+1-b))))
 				#define B_SET_BITS(name,v,e,b)  (((unsigned)(v))<<(b))
@@ -958,6 +962,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				streamtype = 14;
 				printf("MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14\n");
 			break;
+			case 6:
 			case 5:
 				streamtype = 15;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
