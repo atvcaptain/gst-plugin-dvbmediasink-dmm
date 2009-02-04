@@ -88,6 +88,8 @@ struct _GstDVBVideoSink
 	GstBuffer *prev_frame;
 #endif
 
+	char saved_fallback_framerate[16];
+
 	int fd;
 };
 

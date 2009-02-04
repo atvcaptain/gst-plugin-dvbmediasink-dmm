@@ -269,6 +269,7 @@ static void
 gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		GstDVBVideoSinkClass * gclass)
 {
+	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "r");
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
 	klass->codec_data = NULL;
@@ -278,6 +279,10 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->num_non_keyframes = 0;
 	klass->prev_frame = NULL;
 #endif
+	if (f) {
+		fgets(klass->saved_fallback_framerate, 16, f);
+		fclose(f);
+	}
 	GST_BASE_SINK (klass)->sync = FALSE;
 }
 
@@ -976,6 +981,26 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		}
 	}
 	if (streamtype != -1) {
+		gint numerator, denominator;
+		if (gst_structure_get_fraction (structure, "framerate", &numerator, &denominator)) {
+			FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "w");
+			if (f) {
+				int valid_framerates[] = { 23976, 24000, 25000, 29970, 30000, 50000, 59940, 60000 };
+				int framerate = (int)(((double)numerator * 1000) / denominator);
+				int diff = 60000;
+				int best = 0;
+				int i = 0;
+				for (; i < 7; ++i) {
+					int ndiff = abs(framerate - valid_framerates[i]);
+					if (ndiff < diff) {
+						diff = ndiff;
+						best = i;
+					}
+				}
+				fprintf(f, "%d", valid_framerates[best]);
+				fclose(f);
+			}
+		}
 		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0 )
 			if ( streamtype != 0 && streamtype != 6 )
 				GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
@@ -1094,6 +1119,7 @@ static gboolean
 gst_dvbvideosink_stop (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "w");
 	if (self->fd >= 0)
 	{
 		ioctl(self->fd, VIDEO_STOP);
@@ -1111,6 +1137,11 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	if (self->prev_frame)
 		gst_buffer_unref(self->prev_frame);
 #endif
+
+	if (f) {
+		fputs(self->saved_fallback_framerate, f);
+		fclose(f);
+	}
 
 	return TRUE;
 }
