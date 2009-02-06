@@ -270,6 +270,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		GstDVBVideoSinkClass * gclass)
 {
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "r");
+	klass->dec_running = FALSE;
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
 	klass->codec_data = NULL;
@@ -1001,9 +1002,15 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				fclose(f);
 			}
 		}
+		if (self->dec_running) {
+			ioctl(self->fd, VIDEO_STOP, 0);
+			self->dec_running = FALSE;
+		}
 		if (ioctl(self->fd, VIDEO_SET_STREAMTYPE, streamtype) < 0 )
 			if ( streamtype != 0 && streamtype != 6 )
 				GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("hardware decoder can't handle streamtype %i", streamtype));
+		ioctl(self->fd, VIDEO_PLAY);
+		self->dec_running = TRUE;
 	} else
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", mimetype));
 
@@ -1102,7 +1109,6 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 		gst_element_post_message (GST_ELEMENT (basesink), msg);
 
 		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
-		ioctl(self->fd, VIDEO_PLAY);
 	}
 
 	return TRUE;
@@ -1122,7 +1128,10 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "w");
 	if (self->fd >= 0)
 	{
-		ioctl(self->fd, VIDEO_STOP);
+		if (self->dec_running) {
+			ioctl(self->fd, VIDEO_STOP);
+			self->dec_running = FALSE;
+		}
 		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_DEMUX);
 		close(self->fd);
 	}

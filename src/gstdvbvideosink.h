@@ -91,6 +91,7 @@ struct _GstDVBVideoSink
 	char saved_fallback_framerate[16];
 
 	int fd;
+	gboolean dec_running;
 };
 
 struct _GstDVBVideoSinkClass 
