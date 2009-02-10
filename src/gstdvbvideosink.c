@@ -273,6 +273,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->dec_running = FALSE;
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
+	klass->h264_baseline = NULL;
 	klass->codec_data = NULL;
 	klass->codec_type = CT_H264;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
@@ -615,7 +616,30 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			}
 			if (self->codec_type == CT_H264) {  // MKV stuff
 				unsigned int pos = 0;
-				while(TRUE) {
+				if (self->h264_baseline) {
+					unsigned char *dest = GST_BUFFER_DATA (self->h264_baseline);
+					unsigned int dest_pos = 0;
+					while(TRUE) {
+						unsigned int pack_len = (data[pos] << 8) | data[pos+1];
+						if (dest_pos + pack_len <= 96*1024) {
+							memcpy(dest+dest_pos, "\x00\x00\x00\x01", 4);
+							dest_pos += 4;
+							pos += 2;
+							memcpy(dest+dest_pos, data+pos, pack_len);
+							dest_pos += pack_len;
+							if ((pos + pack_len) >= data_len)
+								break;
+							pos += pack_len;
+						}
+						else {
+							printf("BUG!!!!!!!! H264 baseline buffer to small skip video data!!.. please report!\n");
+							break;
+						}
+					}
+					data = dest;
+					data_len = dest_pos;
+				}
+				else while(TRUE) {
 					unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
 //					printf("patch %02x %02x %02x %02x\n",
 //						data[pos],
@@ -874,7 +898,10 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				unsigned short len = (data[6] << 8) | data[7];
 //				printf("2 %d bytes\n", len);
 				if (cd_len >= (len + 8)) {
-//					int i=0;
+					unsigned int i=0;
+					uint8_t profile_num[] = { 66, 77, 88, 100 };
+					uint8_t profile_cmp[2] = { 0x67, 0x00 };
+					const char *profile_str[] = { "baseline", "main", "extended", "high" };
 //					printf("3\n");
 					memcpy(tmp, "\x00\x00\x00\x01", 4);
 					tmp_len += 4;
@@ -883,10 +910,24 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 //						printf("%02x ", data[8+i]);
 //					printf("\n");
 					memcpy(tmp+tmp_len, data+8, len);
-					if (!memcmp(tmp+tmp_len, "\x67\x64\x00", 3)) {
-						tmp[tmp_len+3] = 0x29; // hardcode h264 level 4.1
-						printf("h264 level patched!\n");
+					for (i = 0; i < 4; ++i) {
+						profile_cmp[1] = profile_num[i];
+						if (!memcmp(tmp+tmp_len, profile_cmp, 2)) {
+							uint8_t level_org = tmp[tmp_len+3];
+							if (level_org > 0x29) {
+								printf("H264 %s profile@%d.%d patched down to 4.1!\n",
+									profile_str[i], level_org / 10 , level_org % 10);
+								tmp[tmp_len+3] = 0x29; // level 4.1
+							}
+							else {
+								printf("H264 %s profile@%d.%d\n",
+									profile_str[i], level_org / 10 , level_org % 10);
+							}
+							break;
+						}
 					}
+					if (!i)
+						self->h264_baseline = gst_buffer_new_and_alloc(96*1024);
 					tmp_len += len;
 					cd_pos = 8 + len;
 					if (cd_len > (cd_pos + 2)) {
@@ -1141,6 +1182,9 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
+
+	if (self->h264_baseline)
+		gst_buffer_unref(self->h264_baseline);
 
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame)
