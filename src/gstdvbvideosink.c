@@ -273,7 +273,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->dec_running = FALSE;
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
-	klass->h264_baseline = NULL;
+	klass->h264_lowbitrate = NULL;
 	klass->codec_data = NULL;
 	klass->codec_type = CT_H264;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
@@ -616,8 +616,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			}
 			if (self->codec_type == CT_H264) {  // MKV stuff
 				unsigned int pos = 0;
-				if (self->h264_baseline) {
-					unsigned char *dest = GST_BUFFER_DATA (self->h264_baseline);
+				if (self->h264_lowbitrate) {
+					unsigned char *dest = GST_BUFFER_DATA (self->h264_lowbitrate);
 					unsigned int dest_pos = 0;
 					while(TRUE) {
 						unsigned int pack_len = (data[pos] << 8) | data[pos+1];
@@ -632,7 +632,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 							pos += pack_len;
 						}
 						else {
-							printf("BUG!!!!!!!! H264 baseline buffer to small skip video data!!.. please report!\n");
+							printf("BUG!!!!!!!! H264 low bitrate buffer to small skip video data!!.. please report!\n");
 							break;
 						}
 					}
@@ -920,14 +920,14 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 								tmp[tmp_len+3] = 0x29; // level 4.1
 							}
 							else {
+								if (level_org < 0x1E)
+									self->h264_lowbitrate = gst_buffer_new_and_alloc(96*1024);
 								printf("H264 %s profile@%d.%d\n",
 									profile_str[i], level_org / 10 , level_org % 10);
 							}
 							break;
 						}
 					}
-					if (!i)
-						self->h264_baseline = gst_buffer_new_and_alloc(96*1024);
 					tmp_len += len;
 					cd_pos = 8 + len;
 					if (cd_len > (cd_pos + 2)) {
@@ -1183,8 +1183,8 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
 
-	if (self->h264_baseline)
-		gst_buffer_unref(self->h264_baseline);
+	if (self->h264_lowbitrate)
+		gst_buffer_unref(self->h264_lowbitrate);
 
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame)
