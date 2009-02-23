@@ -120,8 +120,9 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("audio/mpeg, "
 		"mpegversion = (int) { 1, 2, 4 }; "
-		"audio/x-private1-ac3;"
-		"audio/x-ac3")
+		"audio/x-private1-ac3; "
+		"audio/x-ac3; "
+		"audio/x-dts")
 );
 
 #define DEBUG_INIT(bla) \
@@ -355,11 +356,6 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		printf("MIMETYPE %s\n",type);
 		bypass = 0;
 	}
-	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
-	{
-		printf("MIMETYPE %s\n",type);
-		bypass = 2;
-	}
 	else if (!strcmp(type, "audio/x-private1-dts"))
 	{
 		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
@@ -371,6 +367,13 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
 		bypass = 0;
 		self->skip = 2;
+	} 
+	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
+	{
+		printf("MIMETYPE %s\n",type);
+		bypass = 2;
+		GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("DTS not yet handled by driver"));
+		return FALSE;
 	} else
 	{
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
