@@ -260,6 +260,8 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
 
+#define H264_BUFFER_SIZE (64*1024+2048)
+
 /* initialize the new element
  * instantiate pads and add them to element
  * set functions
@@ -273,7 +275,8 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->dec_running = FALSE;
 	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
-	klass->h264_lowbitrate = NULL;
+	klass->h264_buffer = NULL;
+	klass->h264_nal_len_size = 0;
 	klass->codec_data = NULL;
 	klass->codec_type = CT_H264;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
@@ -616,15 +619,46 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			}
 			if (self->codec_type == CT_H264) {  // MKV stuff
 				unsigned int pos = 0;
-				if (self->h264_lowbitrate) {
-					unsigned char *dest = GST_BUFFER_DATA (self->h264_lowbitrate);
+				if (self->h264_nal_len_size == 4) {
+					while(TRUE) {
+						unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
+//						printf("patch %02x %02x %02x %02x\n",
+//							data[pos],
+//							data[pos + 1],
+//							data[pos + 2],
+//							data[pos + 3]);
+						memcpy(data+pos, "\x00\x00\x00\x01", 4);
+//						printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
+						pos += 4;
+						if ((pos + pack_len) >= data_len)
+							break;
+						pos += pack_len;
+					}
+				}
+				else if (self->h264_nal_len_size == 3) {
+					while(TRUE) {
+						unsigned int pack_len = (data[pos] << 16) | (data[pos+1] << 8) | data[pos+2];
+//						printf("patch %02x %02x %02x\n",
+//							data[pos],
+//							data[pos + 1],
+//							data[pos + 2]);
+						memcpy(data+pos, "\x00\x00\x01", 3);
+//						printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
+						pos += 3;
+						if ((pos + pack_len) >= data_len)
+							break;
+						pos += pack_len;
+					}
+				}
+				else {
+					unsigned char *dest = GST_BUFFER_DATA (self->h264_buffer);
 					unsigned int dest_pos = 0;
 					while(TRUE) {
-						unsigned int pack_len = (data[pos] << 8) | data[pos+1];
-						if (dest_pos + pack_len <= 96*1024) {
-							memcpy(dest+dest_pos, "\x00\x00\x00\x01", 4);
-							dest_pos += 4;
-							pos += 2;
+						unsigned int pack_len = self->h264_nal_len_size == 2 ? (data[pos] << 8) | data[pos+1] : data[pos];
+						if (dest_pos + pack_len <= H264_BUFFER_SIZE) {
+							memcpy(dest+dest_pos, "\x00\x00\x01", 3);
+							dest_pos += 3;
+							pos += self->h264_nal_len_size;
 							memcpy(dest+dest_pos, data+pos, pack_len);
 							dest_pos += pack_len;
 							if ((pos + pack_len) >= data_len)
@@ -632,26 +666,12 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 							pos += pack_len;
 						}
 						else {
-							printf("BUG!!!!!!!! H264 low bitrate buffer to small skip video data!!.. please report!\n");
+							printf("BUG!!!!!!!! H264 buffer to small skip video data!!.. please report!\n");
 							break;
 						}
 					}
 					data = dest;
 					data_len = dest_pos;
-				}
-				else while(TRUE) {
-					unsigned int pack_len = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
-//					printf("patch %02x %02x %02x %02x\n",
-//						data[pos],
-//						data[pos + 1],
-//						data[pos + 2],
-//						data[pos + 3]);
-					memcpy(data+pos, "\x00\x00\x00\x01", 4);
-//					printf("pos %d, (%d) >= %d\n", pos, pos+pack_len, data_len);
-					pos += 4;
-					if ((pos + pack_len) >= data_len)
-						break;
-					pos += pack_len;
 				}
 			}
 			else if (self->codec_type == CT_MPEG4_PART2) {
@@ -894,7 +914,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			unsigned int cd_pos = 0;
 			printf("H264 have codec data..!\n");
 //			printf("1\n");
-			if (cd_len > 7) {
+			if (cd_len > 7 && data[0] == 1) {
 				unsigned short len = (data[6] << 8) | data[7];
 //				printf("2 %d bytes\n", len);
 				if (cd_len >= (len + 8)) {
@@ -919,12 +939,9 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 									profile_str[i], level_org / 10 , level_org % 10);
 								tmp[tmp_len+3] = 0x29; // level 4.1
 							}
-							else {
-								if (level_org < 0x1E)
-									self->h264_lowbitrate = gst_buffer_new_and_alloc(96*1024);
+							else
 								printf("H264 %s profile@%d.%d\n",
 									profile_str[i], level_org / 10 , level_org % 10);
-							}
 							break;
 						}
 					}
@@ -943,6 +960,9 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 							tmp_len += len;
 							self->codec_data = gst_buffer_new_and_alloc(tmp_len);
 							memcpy(GST_BUFFER_DATA(self->codec_data), tmp, tmp_len);
+							self->h264_nal_len_size = (data[4] & 0x03) + 1;
+							if (self->h264_nal_len_size < 3)
+								self->h264_buffer = gst_buffer_new_and_alloc(H264_BUFFER_SIZE);
 						}
 						else
 							printf("codec_data to short(4)\n");
@@ -953,9 +973,13 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				else
 					printf("codec_data to short(2)!\n");
 			}
-			else
+			else if (cd_len <= 7)
 				printf("codec_data to short(1)!\n");
+			else
+				printf("wrong avcC version %d!\n", data[0]);
 		}
+		else
+			self->h264_nal_len_size = 0;
 		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
 	} else if (!strcmp (mimetype, "video/x-h263")) {
 		streamtype = 2;
@@ -1183,8 +1207,8 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
 
-	if (self->h264_lowbitrate)
-		gst_buffer_unref(self->h264_lowbitrate);
+	if (self->h264_buffer)
+		gst_buffer_unref(self->h264_buffer);
 
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame)

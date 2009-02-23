@@ -79,7 +79,8 @@ struct _GstDVBVideoSink
 
 	gboolean silent, must_send_header;
 
-	GstBuffer *h264_lowbitrate;
+	GstBuffer *h264_buffer;
+	gint h264_nal_len_size;
 
 	GstBuffer *codec_data;
 	t_codec_type codec_type;
