@@ -66,16 +66,17 @@
 #include <sys/socket.h>
 #include <linux/dvb/audio.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include <gst/gst.h>
 
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
- * Select is used to determine when the fd is ready for use. When the element state is changed,
+ * Poll is used to determine when the fd is ready for use. When the element state is changed,
  * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
  * sends a control message, so fdsink wakes up and changes state immediately otherwise
  * it would stay blocked until it receives some data. */
 
-/* the select call is also performed on the control sockets, that way
+/* the poll call is also performed on the control sockets, that way
  * we can send special commands to unblock the select call */
 #define CONTROL_STOP						'S'		 /* stop the select call */
 #define CONTROL_SOCKETS(sink)	 sink->control_sock
@@ -413,6 +414,47 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 				break;
 		}
 		break;
+	case GST_EVENT_EOS:
+	{
+		struct pollfd pfd[2];
+		int retval;
+		pfd[0].fd = READ_SOCKET(self);
+		pfd[0].events = POLLIN;
+		
+#if 0
+			/* needs driver support */
+		pfd[1].fd = self->fd;
+		pfd[1].events = POLLHUP;
+
+		do {
+			GST_DEBUG_OBJECT (self, "going into poll to wait for EOS");
+			retval = poll(pfd, 2, -1);
+		} while ((retval == -1 && errno == EINTR));
+		
+		if (pfd[0].revents & POLLIN) /* flush */
+			break;
+		GST_DEBUG_OBJECT (self, "EOS wait ended because of buffer empty. now waiting for PTS %llx", self->pts_eos);
+#endif
+
+		do {
+			unsigned long long cur;
+			ioctl(self->fd, AUDIO_GET_PTS, &cur);
+			
+			long long diff = self->last_pts_eos - cur;
+			
+			GST_DEBUG_OBJECT (self, "at %llx (diff %llx)", cur, diff);
+			
+			if (diff <= 0x1000)
+				break;
+
+			retval = poll(pfd, 1, 1000);
+				/* check for flush */
+			if (pfd[0].revents & POLLIN)
+				break;
+		} while (1);
+
+		break;
+	}
 	default:
 		break;
 	}
@@ -426,10 +468,11 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char pes_header[64];
 	int skip = self->skip;
 	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
-	fd_set readfds;
-	fd_set writefds;
 	gint retval;
 	size_t pes_header_size;
+	
+	struct pollfd pfd[2];
+	
 //	int i=0;
 
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
@@ -444,22 +487,21 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		return GST_FLOW_ERROR;
 	}
 
-	FD_ZERO (&readfds);
-	FD_SET (READ_SOCKET (self), &readfds);
-
-	FD_ZERO (&writefds);
-	FD_SET (self->fd, &writefds);
+	pfd[0].fd = READ_SOCKET(self);
+	pfd[0].events = POLLIN;
+	pfd[1].fd = self->fd;
+	pfd[1].events = POLLOUT;
 
 	do {
-		GST_DEBUG_OBJECT (self, "going into select, have %d bytes to write",
+		GST_DEBUG_OBJECT (self, "going into poll, have %d bytes to write",
 				size);
-		retval = select (FD_SETSIZE, &readfds, &writefds, NULL, NULL);
+		retval = poll(pfd, 2, -1);
 	} while ((retval == -1 && errno == EINTR));
 
 	if (retval == -1)
-		goto select_error;
+		goto poll_error;
 
-	if (FD_ISSET (READ_SOCKET (self), &readfds)) {
+	if (pfd[0].revents & POLLIN) {
 		/* read all stop commands */
 		while (TRUE) {
 			gchar command;
@@ -474,7 +516,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 		goto stopped;
 	}
-
+	
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
@@ -490,6 +532,9 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
 	{
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
+
+		self->last_pts_eos = self->pts_eos;
+		self->pts_eos = pts;
 
 		pes_header[4] = (size + 8) >> 8;
 		pes_header[5] = (size + 8) & 0xFF;
@@ -536,11 +581,11 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	write(self->fd, GST_BUFFER_DATA (buffer) + skip, GST_BUFFER_SIZE (buffer) - skip);
 
 	return GST_FLOW_OK;
-select_error:
+poll_error:
 	{
 		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
-				("select on file descriptor: %s.", g_strerror (errno)));
-		GST_DEBUG_OBJECT (self, "Error during select");
+				("poll on file descriptor: %s.", g_strerror (errno)));
+		GST_DEBUG_OBJECT (self, "Error during poll");
 		return GST_FLOW_ERROR;
 	}
 stopped:
