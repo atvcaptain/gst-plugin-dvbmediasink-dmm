@@ -284,6 +284,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 	klass->num_non_keyframes = 0;
 	klass->prev_frame = NULL;
 #endif
+
 	if (f) {
 		fgets(klass->saved_fallback_framerate, 16, f);
 		fclose(f);
@@ -472,6 +473,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			g_warning ("failed to ioctl VIDEO_GET_EVENT!");
 		else
 		{
+			printf("VIDEO_EVENT %d\n", evt.type);
 			if (evt.type == VIDEO_EVENT_SIZE_CHANGED)
 			{
 				s = gst_structure_new ("eventSizeChanged",
@@ -607,15 +609,17 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		if (self->codec_data) {
 			if (self->must_send_header) {
-				unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
-				unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
-				if (self->codec_type == CT_DIVX311)
-					write(self->fd, codec_data, codec_data_len);
-				else {
-					memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
-					pes_header_len += codec_data_len;
+				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2) {
+					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
+					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
+					if (self->codec_type == CT_DIVX311)
+						write(self->fd, codec_data, codec_data_len);
+					else {
+						memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
+						pes_header_len += codec_data_len;
+					}
+					self->must_send_header = FALSE;
 				}
-				self->must_send_header = FALSE;
 			}
 			if (self->codec_type == CT_H264) {  // MKV stuff
 				unsigned int pos = 0;
@@ -817,6 +821,101 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		payload_len += GST_BUFFER_SIZE (self->prev_frame);
 #endif
 
+	if (self->codec_type == CT_MPEG2 || self->codec_type == CT_MPEG1) {
+		if (!self->codec_data && data_len > 3 && !data[0] && !data[1] && data[2] == 1 && data[3] == 0xb3) { // sequence header?
+			gboolean ok = TRUE;
+			unsigned int pos = 4;
+			unsigned int sheader_data_len=0;
+			while(pos < data_len && ok) {
+				if ( pos >= data_len )
+					break;
+				pos+=7;
+				if ( pos >=data_len )
+					break;
+				sheader_data_len=12;
+				if ( data[pos] & 2 ) { // intra matrix avail?
+					pos+=64;
+					if ( pos >=data_len )
+						break;
+					sheader_data_len+=64;
+				}
+				if ( data[pos] & 1 ) { // non intra matrix avail?
+					pos+=64;
+					if ( pos >=data_len )
+						break;
+					sheader_data_len+=64;
+				}
+				pos+=1;
+				if ( pos+3 >=data_len )
+					break;
+				// extended start code
+				if ( !data[pos] && !data[pos+1] && data[pos+2] == 1 && data[pos+3] == 0xB5 ) {
+					pos+=3;
+					sheader_data_len+=3;
+					do {
+						pos+=1;
+						++sheader_data_len;
+						if (pos+2 > data_len)
+							goto leave;
+					}
+					while( data[pos] || data[pos+1] || data[pos+2] != 1 );
+				}
+				if ( pos+3 >=data_len )
+					break;
+				// private data
+				if ( !data[pos] && !data[pos+1] && data[pos+2] && data[pos+3] == 0xB2 ) {
+					pos+=3;
+					sheader_data_len+=3;
+					do {
+						pos+=1;
+						++sheader_data_len;
+						if (pos+2 > data_len)
+							goto leave;
+					}
+					while( data[pos] || data[pos+1] || data[pos+2] != 1 );
+				}
+				self->codec_data = gst_buffer_new_and_alloc(sheader_data_len);
+				memcpy(GST_BUFFER_DATA(self->codec_data), data+pos-sheader_data_len, sheader_data_len);
+				self->must_send_header = FALSE;
+leave:
+				ok = FALSE;
+			}
+		}
+		else if (self->codec_data && self->must_send_header) {
+			unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
+			unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
+			int pos = 0;
+			while(pos < data_len) {
+				if ( data[pos++] )
+					continue;
+				if ( data[pos++] )
+					continue;
+				while ( !data[pos] )
+					pos++;
+				if ( data[pos++] != 1 )
+					continue;
+				if ( data[pos++] != 0xb8 ) // group start code
+					continue;
+				pos-=4; // before group start
+				payload_len += codec_data_len;
+				if (payload_len <= 0xFFFF) {
+					pes_header[4] = payload_len >> 8;
+					pes_header[5] = payload_len & 0xFF;
+				}
+				else {
+					pes_header[4] = 0;
+					pes_header[5] = 0;
+				}
+				write(self->fd, pes_header, pes_header_len);
+				write(self->fd, data, pos);
+				write(self->fd, codec_data, codec_data_len);
+				write(self->fd, data+pos, data_len - pos);
+				self->must_send_header = FALSE;
+				return GST_FLOW_OK;
+			}
+		}
+	}
+
 	if (payload_len <= 0xFFFF) {
 		pes_header[4] = payload_len >> 8;
 		pes_header[5] = payload_len & 0xFF;
@@ -879,10 +978,12 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		switch (mpegversion) {
 			case 1:
 				streamtype = 6;
+				self->codec_type = CT_MPEG1;
 				printf("MIMETYPE video/mpeg1 -> VIDEO_SET_STREAMTYPE, 6\n");
 			break;
 			case 2:
 				streamtype = 0;
+				self->codec_type = CT_MPEG2;
 				printf("MIMETYPE video/mpeg2 -> VIDEO_SET_STREAMTYPE, 0\n");
 			break;
 			case 4:

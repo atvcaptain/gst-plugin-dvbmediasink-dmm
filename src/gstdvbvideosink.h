@@ -69,7 +69,7 @@ G_BEGIN_DECLS
 typedef struct _GstDVBVideoSink      GstDVBVideoSink;
 typedef struct _GstDVBVideoSinkClass GstDVBVideoSinkClass;
 
-typedef enum { CT_H264, CT_DIVX311, CT_MPEG4_PART2 } t_codec_type;
+typedef enum { CT_MPEG1, CT_MPEG2, CT_H264, CT_DIVX311, CT_MPEG4_PART2 } t_codec_type;
 
 struct _GstDVBVideoSink
 {
