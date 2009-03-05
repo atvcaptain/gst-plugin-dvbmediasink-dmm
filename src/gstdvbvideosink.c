@@ -682,7 +682,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					data_len = dest_pos;
 				}
 			}
-			else if (self->codec_type == CT_MPEG4_PART2 && 0) {
+			else if (self->codec_type == CT_MPEG4_PART2) {
 				if (data[0] || data[1] || data[2] != 1) {
 					memcpy(pes_header+pes_header_len, "\x00\x00\x01", 3);
 					pes_header_len += 3;
