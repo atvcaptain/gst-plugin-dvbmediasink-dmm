@@ -615,6 +615,10 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					if (self->codec_type == CT_DIVX311)
 						write(self->fd, codec_data, codec_data_len);
 					else {
+						if (pes_header[0] || pes_header[1] || pes_header[2] != 1) {
+							memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
+							pes_header_len += 3;
+						}
 						memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
 						pes_header_len += codec_data_len;
 					}
@@ -678,13 +682,17 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					data_len = dest_pos;
 				}
 			}
-			else if (self->codec_type == CT_MPEG4_PART2) {
-				memcpy(pes_header+pes_header_len, "\x00\x00\x01", 3);
-				pes_header_len += 3;
+			else if (self->codec_type == CT_MPEG4_PART2 && 0) {
+				if (data[0] || data[1] || data[2] != 1) {
+					memcpy(pes_header+pes_header_len, "\x00\x00\x01", 3);
+					pes_header_len += 3;
+				}
 			}
 			else if (self->codec_type == CT_DIVX311) {
-				memcpy(pes_header+pes_header_len, "\x00\x00\x01\xb6", 4);
-				pes_header_len += 4;
+				if (data[0] || data[1] || data[2] != 1 || data[3] != 0xb6) {
+					memcpy(pes_header+pes_header_len, "\x00\x00\x01\xb6", 4);
+					pes_header_len += 4;
+				}
 			}
 		}
 	}
