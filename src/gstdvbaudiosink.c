@@ -313,9 +313,6 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				break;
 			}
 			case 2:
-				bypass = 1;
-				printf("MIMETYPE %s version %d\n",type,mpegversion);
-				break;
 			case 4:
 			{
 				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
