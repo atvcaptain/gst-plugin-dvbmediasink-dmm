@@ -313,6 +313,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				break;
 			}
 			case 2:
+				bypass = 8;
 			case 4:
 			{
 				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
@@ -341,7 +342,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				}
 				else
 					printf("no codec data!!!\n");
-				bypass = 8;
+				if (bypass == -1)
+					bypass = 0x0b;
 				break;
 			}
 			default:
@@ -465,17 +467,15 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char pes_header[64];
 	int skip = self->skip;
 	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
+	unsigned char *data = GST_BUFFER_DATA (buffer) + skip;
 	gint retval;
 	size_t pes_header_size;
-	
 	struct pollfd pfd[2];
-	
-//	int i=0;
 
+//	int i=0;
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
-
 //	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	if ( !bypass_set )
@@ -575,7 +575,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	}
 
 	write(self->fd, pes_header, pes_header_size);
-	write(self->fd, GST_BUFFER_DATA (buffer) + skip, GST_BUFFER_SIZE (buffer) - skip);
+	write(self->fd, data, GST_BUFFER_SIZE (buffer) - skip);
 
 	return GST_FLOW_OK;
 poll_error:
