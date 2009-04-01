@@ -323,13 +323,15 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
 					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
 					guint8 channels = (h[1] & 0x78) >> 3;
-//					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-//						obj_type, rate_idx, channels);
+					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+						obj_type, rate_idx, channels);
 					/* Sync point over a full byte */
 					self->aac_adts_header[0] = 0xFF;
 					/* Sync point continued over first 4 bits + static 4 bits
 					 * (ID, layer, protection)*/
 					self->aac_adts_header[1] = 0xF1;
+					if (mpegversion == 2)
+						self->aac_adts_header[1] |= 8;
 					/* Object type over first 2 bits */
 					self->aac_adts_header[2] = obj_type << 6;
 					/* rate index over next 4 bits */
@@ -340,8 +342,40 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					self->aac_adts_header[3] = (channels & 0x3) << 6;
 					self->aac_adts_header_valid = TRUE;
 				}
-				else
-					printf("no codec data!!!\n");
+				else {
+					gint rate, channels, rate_idx=0, obj_type=1; // hardcoded yet.. hopefully this works every time ;)
+					gint AdtsSamplingRates[] = {
+						96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
+						16000, 12000, 11025, 8000, 7350, 0
+					};
+					printf("no codec data!\n");
+					if (gst_structure_get_int (structure, "rate", &rate) && gst_structure_get_int (structure, "channels", &channels)) {
+						do {
+							if (AdtsSamplingRates[rate_idx] == rate)
+								break;
+							++rate_idx;
+						} while (AdtsSamplingRates[rate_idx]);
+						if (AdtsSamplingRates[rate_idx]) {
+							printf("mpegversion %d, channels %d, rate %d, rate_idx %d\n", mpegversion, channels, rate, rate_idx);
+							/* Sync point over a full byte */
+							self->aac_adts_header[0] = 0xFF;
+							/* Sync point continued over first 4 bits + static 4 bits
+							 * (ID, layer, protection)*/
+							self->aac_adts_header[1] = 0xF1;
+							if (mpegversion == 2)
+								self->aac_adts_header[1] |= 8;
+							/* Object type over first 2 bits */
+							self->aac_adts_header[2] = obj_type << 6;
+							/* rate index over next 4 bits */
+							self->aac_adts_header[2] |= rate_idx << 2;
+							/* channels over last 2 bits */
+							self->aac_adts_header[2] |= (channels & 0x4) >> 2;
+							/* channels continued over next 2 bits + 4 bits at zero */
+							self->aac_adts_header[3] = (channels & 0x3) << 6;
+							self->aac_adts_header_valid = TRUE;
+						}
+					}
+				}
 				if (bypass == -1)
 					bypass = 0x0b;
 				break;
