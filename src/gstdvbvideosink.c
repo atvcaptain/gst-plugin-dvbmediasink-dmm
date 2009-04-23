@@ -218,6 +218,8 @@ static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink,
 static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
+static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
+
 
 static void
 gst_dvbvideosink_base_init (gpointer klass)
@@ -256,6 +258,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbvideosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbvideosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
+	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
@@ -350,7 +353,7 @@ gst_dvbvideosink_query (GstElement * element, GstQuery * query)
 			goto query_default;
 
 		ioctl(self->fd, VIDEO_GET_PTS, &cur);
-//		printf("PTS: %08llx", cur);
+// 		printf("DVBVIDEOSINK VIDEO_GET_PTS: %08llx\n", cur);
 
 		cur *= 11111;
 
@@ -374,6 +377,25 @@ static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 	return TRUE;
 }
 
+static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * sink)
+{
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
+	while (TRUE)
+	{
+		gchar command;
+		int res;
+		
+		READ_COMMAND (self, command, res);
+		if (res < 0)
+		{
+		GST_LOG_OBJECT (self, "no more commands");
+		/* no more commands */
+		break;
+		}
+	}
+	return TRUE;
+}
+
 static gboolean
 gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 {
@@ -388,15 +410,31 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		self->must_send_header = TRUE;
-		while (1)
-		{
-			gchar command;
-			int res;
+		break;
 
-			READ_COMMAND (self, command, res);
-			if (res < 0)
-				break;
+	case GST_EVENT_NEWSEGMENT:{
+		GstFormat fmt;
+		gboolean update;
+		gdouble rate, applied_rate;
+		gint64 cur, stop, time;
+		int skip = 0, repeat = 0, ret;
+		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
+// 		g_print("DVBVIDEOSINK GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
+		
+		if (fmt == GST_FORMAT_TIME)
+		{	
+			if ( rate > 1 )
+				skip = (int) rate;
+			else if ( rate < 1 )
+				repeat = 1.0/rate;
+
+			ret = ioctl(self->fd, VIDEO_SLOWMOTION, repeat);
+			ret = ioctl(self->fd, VIDEO_FAST_FORWARD, skip);
+// 			gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
 		}
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -1306,6 +1344,8 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 			ioctl(self->fd, VIDEO_STOP);
 			self->dec_running = FALSE;
 		}
+		ioctl(self->fd, VIDEO_SLOWMOTION, 0);
+		ioctl(self->fd, VIDEO_FAST_FORWARD, 0);
 		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_DEMUX);
 		close(self->fd);
 	}

@@ -65,6 +65,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/video.h>
 #include <fcntl.h>
 #include <poll.h>
 
@@ -146,6 +147,7 @@ static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink,
 	GstBuffer * buffer);
 static gboolean gst_dvbaudiosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
+static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 
 gboolean bypass_set = FALSE;
@@ -187,6 +189,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
+	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 }
@@ -207,8 +210,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass,
 }
 
 static void
-gst_dvbaudiosink_set_property (GObject *object, guint prop_id,
-																	const GValue *value, GParamSpec *pspec)
+gst_dvbaudiosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
 {
 	GstDVBAudioSink *filter;
 
@@ -256,6 +258,7 @@ gst_dvbaudiosink_query (GstElement * element, GstQuery * query)
 	case GST_QUERY_POSITION:
 	{
 		gint64 cur = 0;
+		static gint64 last_pos = 0;
 		GstFormat format;
 
 		gst_query_parse_position (query, &format, NULL);
@@ -264,7 +267,13 @@ gst_dvbaudiosink_query (GstElement * element, GstQuery * query)
 			goto query_default;
 
 		ioctl(self->fd, AUDIO_GET_PTS, &cur);
-//		printf("PTS: %08llx", cur);
+// 		printf("gst_dvbaudiosink_query AUDIO_GET_PTS: %08llx\n", cur);
+
+		/* workaround until driver fixed */
+		if (cur)
+			last_pos = cur;
+		else
+			cur = last_pos;
 
 		cur *= 11111;
 
@@ -285,6 +294,25 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 
 	SEND_COMMAND (self, CONTROL_STOP);
 
+	return TRUE;
+}
+
+static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
+{
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
+	while (TRUE)
+	{
+		gchar command;
+		int res;
+		
+		READ_COMMAND (self, command, res);
+		if (res < 0)
+		{
+		GST_LOG_OBJECT (self, "no more commands");
+		/* no more commands */
+		break;
+		}
+	}
 	return TRUE;
 }
 
@@ -313,7 +341,6 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				break;
 			}
 			case 2:
-				bypass = 8;
 			case 4:
 			{
 				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
@@ -323,8 +350,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
 					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
 					guint8 channels = (h[1] & 0x78) >> 3;
-					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-						obj_type, rate_idx, channels);
+//					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+//						obj_type, rate_idx, channels);
 					/* Sync point over a full byte */
 					self->aac_adts_header[0] = 0xFF;
 					/* Sync point continued over first 4 bits + static 4 bits
@@ -418,8 +445,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
 	{
-		GST_ELEMENT_ERROR (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i", bypass));
-		return FALSE;
+		GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
+// 		return FALSE;
 	}
 	bypass_set = TRUE;
 	return TRUE;
@@ -437,15 +464,6 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		break;
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
-		while (1)
-		{
-			gchar command;
-			int res;
-
-			READ_COMMAND (self, command, res);
-			if (res < 0)
-				break;
-		}
 		break;
 	case GST_EVENT_EOS:
 	{
@@ -488,6 +506,33 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 
 		break;
 	}
+	case GST_EVENT_NEWSEGMENT:{
+		GstFormat fmt;
+		gboolean update;
+		gdouble rate, applied_rate;
+		gint64 cur, stop, time;
+		int skip = 0, repeat = 0, ret;
+		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
+// 		g_print("DVBAUDIOSINK GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
+		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
+
+		if (fmt == GST_FORMAT_TIME)
+		{
+			if ( rate > 1 )
+				skip = (int) rate;
+			else if ( rate < 1 )
+				repeat = 1.0/rate;
+
+			ret = ioctl(video_fd, VIDEO_SLOWMOTION, repeat);
+			ret = ioctl(video_fd, VIDEO_FAST_FORWARD, skip);
+
+//			gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
+
+		}
+		close(video_fd);
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -547,7 +592,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 		goto stopped;
 	}
-	
+
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
@@ -669,6 +714,14 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 	{
 		ioctl(self->fd, AUDIO_STOP);
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_DEMUX);
+
+		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
+		if ( video_fd > 0 )
+		{
+			ioctl(video_fd, VIDEO_SLOWMOTION, 0);
+			ioctl(video_fd, VIDEO_FAST_FORWARD, 0);
+			close (video_fd);
+		}
 		close(self->fd);
 	}
 
