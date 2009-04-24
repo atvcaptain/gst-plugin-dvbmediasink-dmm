@@ -495,7 +495,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 			
 			GST_DEBUG_OBJECT (self, "at %llx (diff %llx)", cur, diff);
 			
-			if (diff <= 0x1000)
+			if (diff <= 0x1400)
 				break;
 
 			retval = poll(pfd, 1, 1000);
