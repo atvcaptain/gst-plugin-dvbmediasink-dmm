@@ -484,26 +484,31 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		if (pfd[0].revents & POLLIN) /* flush */
 			break;
 		GST_DEBUG_OBJECT (self, "EOS wait ended because of buffer empty. now waiting for PTS %llx", self->pts_eos);
-#endif
-		long long lastdiff = 0;
+#else
+		if (self->prev_data) {
+			int i=0;
+			for (; i < 3; ++i)  // write the last frame three times more to fill the buffer...
+				gst_dvbaudiosink_render (sink, self->prev_data);
+		}
+
 		do {
 			unsigned long long cur;
+			long long diff = self->pts_eos - cur;
+
 			ioctl(self->fd, AUDIO_GET_PTS, &cur);
-			
-			long long diff = self->last_pts_eos - cur;
-			
-			GST_DEBUG_OBJECT (self, "at %llx (diff %llx)", cur, diff);
-			
-			if ( diff <= 0x1000 || lastdiff == diff )
+
+			GST_DEBUG_OBJECT(self, "at %llx last %llx (diff %llx)", cur, self->pts_eos, diff);
+
+			if ( abs(diff) <= 100 )
 				break;
 
-			lastdiff = diff;
-			retval = poll(pfd, 1, 1000);
+			retval = poll(pfd, 1, 500);
+
 				/* check for flush */
 			if (pfd[0].revents & POLLIN)
 				break;
 		} while (1);
-
+#endif
 		break;
 	}
 	case GST_EVENT_NEWSEGMENT:{
@@ -609,7 +614,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	{
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
 
-		self->last_pts_eos = self->pts_eos;
 		self->pts_eos = pts;
 
 		pes_header[4] = (size + 8) >> 8;
@@ -655,6 +659,13 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	write(self->fd, pes_header, pes_header_size);
 	write(self->fd, data, GST_BUFFER_SIZE (buffer) - skip);
+
+	gst_buffer_ref(buffer);
+
+	if (self->prev_data)
+		gst_buffer_unref(self->prev_data);
+
+	self->prev_data = buffer;
 
 	return GST_FLOW_OK;
 poll_error:
@@ -724,6 +735,9 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 		}
 		close(self->fd);
 	}
+
+	if (self->prev_data)
+		gst_buffer_unref(self->prev_data);
 
 	return TRUE;
 }

@@ -78,8 +78,10 @@ struct _GstDVBAudioSink
 	gboolean silent;
 	int fd;
 	int skip;
-	
-	unsigned long long pts_eos, last_pts_eos;
+
+	GstBuffer *prev_data;
+
+	unsigned long long pts_eos;
 };
 
 struct _GstDVBAudioSinkClass 
