@@ -493,13 +493,14 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 
 		do {
 			unsigned long long cur;
-			long long diff = self->pts_eos - cur;
 
 			ioctl(self->fd, AUDIO_GET_PTS, &cur);
 
-			GST_DEBUG_OBJECT(self, "at %llx last %llx (diff %llx)", cur, self->pts_eos, diff);
+			long long diff = self->pts_eos - cur;
 
-			if ( abs(diff) <= 100 )
+			GST_DEBUG_OBJECT (self, "at %llx last %llx (diff %lld)\n", cur, self->pts_eos, diff);
+
+			if ( diff <= 100 )
 				break;
 
 			retval = poll(pfd, 1, 500);
