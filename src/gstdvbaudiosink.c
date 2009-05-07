@@ -471,7 +471,6 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		int retval;
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
-		
 #if 0
 			/* needs driver support */
 		pfd[1].fd = self->fd;
@@ -486,7 +485,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 			break;
 		GST_DEBUG_OBJECT (self, "EOS wait ended because of buffer empty. now waiting for PTS %llx", self->pts_eos);
 #endif
-
+		long long lastdiff = 0;
 		do {
 			unsigned long long cur;
 			ioctl(self->fd, AUDIO_GET_PTS, &cur);
@@ -495,9 +494,10 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 			
 			GST_DEBUG_OBJECT (self, "at %llx (diff %llx)", cur, diff);
 			
-			if (diff <= 0x1400)
+			if ( diff <= 0x1000 || lastdiff == diff )
 				break;
 
+			lastdiff = diff;
 			retval = poll(pfd, 1, 1000);
 				/* check for flush */
 			if (pfd[0].revents & POLLIN)
