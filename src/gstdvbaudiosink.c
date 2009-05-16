@@ -124,6 +124,7 @@ GST_STATIC_PAD_TEMPLATE (
 		"mpegversion = (int) { 1, 2, 4 }; "
 		"audio/x-private1-ac3; "
 		"audio/x-ac3; "
+		"audio/x-private1-dts; "
 		"audio/x-dts")
 );
 
@@ -412,29 +413,27 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				break;
 		}
 	}
-	else if (!strcmp(type, "audio/x-ac3") || !strcmp(type, "audio/ac3"))
+	else if (!strcmp(type, "audio/x-ac3"))
 	{
 		printf("MIMETYPE %s\n",type);
 		bypass = 0;
-	}
-	else if (!strcmp(type, "audio/x-private1-dts"))
-	{
-		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
-		bypass = 2;
-		self->skip = 2;
 	}
 	else if (!strcmp(type, "audio/x-private1-ac3"))
 	{
-		printf("MIMETYPE %s (DVD Audio - 2 byte skipping)\n",type);
+		printf("MIMETYPE %s (DVD AC3 Audio - 2 byte skipping)\n",type);
 		bypass = 0;
 		self->skip = 2;
 	} 
-	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
+	else if (!strcmp(type, "audio/x-dts"))
 	{
 		printf("MIMETYPE %s\n",type);
 		bypass = 2;
-		GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("DTS not yet handled by driver"));
-		return FALSE;
+	}
+	else if (!strcmp(type, "audio/x-private1-dts"))
+	{
+		printf("MIMETYPE %s (DVD DTS Audio - 2 byte skipping)\n",type);
+		bypass = 2;
+		self->skip = 2;
 	} else
 	{
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
@@ -445,7 +444,12 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
 	{
-		GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
+		if (strstr(type, "-dts")) {
+			GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("DTS not yet handled by driver"));
+			return FALSE;
+		}
+		else
+			GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
 // 		return FALSE;
 	}
 	bypass_set = TRUE;
