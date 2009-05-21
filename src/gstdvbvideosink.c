@@ -292,22 +292,21 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		fgets(klass->saved_fallback_framerate, 16, f);
 		fclose(f);
 	}
-	GST_BASE_SINK (klass)->sync = FALSE;
+	GST_BASE_SINK (klass)->sync = TRUE;
 }
 
 static void
-gst_dvbvideosink_set_property (GObject *object, guint prop_id,
-																	const GValue *value, GParamSpec *pspec)
+gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
 {
-	GstDVBVideoSink *filter;
+	GstDVBVideoSink *sink;
 
 	g_return_if_fail (GST_IS_DVBVIDEOSINK (object));
-	filter = GST_DVBVIDEOSINK (object);
+	sink = GST_DVBVIDEOSINK (object);
 
 	switch (prop_id)
 	{
 	case ARG_SILENT:
-		filter->silent = g_value_get_boolean (value);
+		sink->silent = g_value_get_boolean (value);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -319,14 +318,14 @@ static void
 gst_dvbvideosink_get_property (GObject *object, guint prop_id,
 																	GValue *value, GParamSpec *pspec)
 {
-	GstDVBVideoSink *filter;
+	GstDVBVideoSink *sink;
 
 	g_return_if_fail (GST_IS_DVBVIDEOSINK (object));
-	filter = GST_DVBVIDEOSINK (object);
+	sink = GST_DVBVIDEOSINK (object);
 
 	switch (prop_id) {
 	case ARG_SILENT:
-		g_value_set_boolean (value, filter->silent);
+		g_value_set_boolean (value, sink->silent);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -339,12 +338,10 @@ gst_dvbvideosink_query (GstElement * element, GstQuery * query)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (element);
 
-//	printf("QUERY: type: %d (%d)\n", GST_QUERY_TYPE(query), GST_QUERY_POSITION);
-
 	switch (GST_QUERY_TYPE (query)) {
 	case GST_QUERY_POSITION:
 	{
-		gint64 cur = 0;
+		gint64 cur = 0, res = 0;
 		GstFormat format;
 
 		gst_query_parse_position (query, &format, NULL);
@@ -353,13 +350,12 @@ gst_dvbvideosink_query (GstElement * element, GstQuery * query)
 			goto query_default;
 
 		ioctl(self->fd, VIDEO_GET_PTS, &cur);
-// 		printf("DVBVIDEOSINK VIDEO_GET_PTS: %08llx\n", cur);
-
-		cur *= 11111;
-
-		gst_query_set_position (query, format, cur);
 		
-		GST_DEBUG_OBJECT (self, "position format %d", format);
+		res = cur *11111;
+
+		gst_query_set_position (query, format, res);
+
+		GST_LOG_OBJECT (self, "GST_QUERY_POSITION pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (res));
 		return TRUE;
 	}
 	default:
@@ -419,7 +415,7 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 		gint64 cur, stop, time;
 		int skip = 0, repeat = 0, ret;
 		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
-// 		g_print("DVBVIDEOSINK GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
+		GST_LOG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
 		
 		if (fmt == GST_FORMAT_TIME)
 		{	
@@ -477,7 +473,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	FD_SET (self->fd, &priofds);
 
 	do {
-		GST_DEBUG_OBJECT (self, "going into select, have %d bytes to write",
+		GST_LOG_OBJECT (self, "going into select, have %d bytes to write",
 				data_len);
 		retval = select (FD_SETSIZE, &readfds, &writefds, &priofds, NULL);
 	} while ((retval == -1 && errno == EINTR));
@@ -511,7 +507,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			g_warning ("failed to ioctl VIDEO_GET_EVENT!");
 		else
 		{
-			printf("VIDEO_EVENT %d\n", evt.type);
+			GST_INFO_OBJECT (self, "VIDEO_EVENT %d", evt.type);
 			if (evt.type == VIDEO_EVENT_SIZE_CHANGED)
 			{
 				s = gst_structure_new ("eventSizeChanged",
@@ -612,7 +608,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			if (data_len - pos < 13)
 				break;
 			if (sscanf((char*)data+pos, "DivX%d%c%d%cp", &tmp1, &c1, &tmp2, &c2) == 4 && (c1 == 'b' || c1 == 'B') && (c2 == 'p' || c2 == 'P')) {
-				printf("%s seen... already packed!\n", (char*)data+pos);
+				GST_DEBUG_OBJECT (self, "%s seen... already packed!", (char*)data+pos);
 				self->must_pack_bitstream = 0;
 			}
 //			if (self->must_pack_bitstream)
@@ -712,7 +708,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 							pos += pack_len;
 						}
 						else {
-							printf("BUG!!!!!!!! H264 buffer to small skip video data!!.. please report!\n");
+							g_error("BUG!!!!!!!! H264 buffer to small skip video data!!.. please report!\n");
 							break;
 						}
 					}
@@ -841,7 +837,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					break;
 				case 4: // N-Frame
 				default:
-					printf("unhandled divx5/xvid frame type %d\n", (data[pos] & 0xC0) >> 6);
+					g_warning("unhandled divx5/xvid frame type %d\n", (data[pos] & 0xC0) >> 6);
 					break;
 			}
 		}
@@ -999,12 +995,12 @@ select_error:
 	{
 		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
 				("select on file descriptor: %s.", g_strerror (errno)));
-		GST_DEBUG_OBJECT (self, "Error during select");
+		GST_WARNING_OBJECT (self, "Error during select");
 		return GST_FLOW_ERROR;
 	}
 stopped:
 	{
-		GST_DEBUG_OBJECT (self, "Select stopped");
+		GST_WARNING_OBJECT (self, "Select stopped");
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		return GST_FLOW_WRONG_STATE;
 	}
@@ -1025,24 +1021,24 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			case 1:
 				streamtype = 6;
 				self->codec_type = CT_MPEG1;
-				printf("MIMETYPE video/mpeg1 -> VIDEO_SET_STREAMTYPE, 6\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/mpeg1 -> VIDEO_SET_STREAMTYPE, 6");
 			break;
 			case 2:
 				streamtype = 0;
 				self->codec_type = CT_MPEG2;
-				printf("MIMETYPE video/mpeg2 -> VIDEO_SET_STREAMTYPE, 0\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/mpeg2 -> VIDEO_SET_STREAMTYPE, 0");
 			break;
 			case 4:
 			{
 				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
 				if (codec_data) {
-					printf("MPEG4 have codec data\n");
+					GST_INFO_OBJECT (self, "MPEG4 have codec data");
 					self->codec_data = gst_value_get_buffer (codec_data);
 					self->codec_type = CT_MPEG4_PART2;
 					gst_buffer_ref (self->codec_data);
 				}
 				streamtype = 4;
-				printf("MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/mpeg4 -> VIDEO_SET_STREAMTYPE, 4");
 			}
 			break;
 			default:
@@ -1059,8 +1055,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			unsigned char *data = GST_BUFFER_DATA (codec_data);
 			unsigned int cd_len = GST_BUFFER_SIZE (codec_data);
 			unsigned int cd_pos = 0;
-			printf("H264 have codec data..!\n");
-//			printf("1\n");
+			GST_INFO_OBJECT (self, "H264 have codec data..!");
 			if (cd_len > 7 && data[0] == 1) {
 				unsigned short len = (data[6] << 8) | data[7];
 //				printf("2 %d bytes\n", len);
@@ -1082,13 +1077,11 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 						if (!memcmp(tmp+tmp_len, profile_cmp, 2)) {
 							uint8_t level_org = tmp[tmp_len+3];
 							if (level_org > 0x29) {
-								printf("H264 %s profile@%d.%d patched down to 4.1!\n",
-									profile_str[i], level_org / 10 , level_org % 10);
+								GST_INFO_OBJECT (self, "H264 %s profile@%d.%d patched down to 4.1!", profile_str[i], level_org / 10 , level_org % 10);
 								tmp[tmp_len+3] = 0x29; // level 4.1
 							}
 							else
-								printf("H264 %s profile@%d.%d\n",
-									profile_str[i], level_org / 10 , level_org % 10);
+								GST_INFO_OBJECT (self, "H264 %s profile@%d.%d", profile_str[i], level_org / 10 , level_org % 10);
 							break;
 						}
 					}
@@ -1112,31 +1105,31 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 								self->h264_buffer = gst_buffer_new_and_alloc(H264_BUFFER_SIZE);
 						}
 						else
-							printf("codec_data to short(4)\n");
+							GST_WARNING_OBJECT (self, "codec_data to short(4)");
 					}
 					else
-						printf("codec_data to short(3)!\n");
+						GST_WARNING_OBJECT (self, "codec_data to short(3)");
 				}
 				else
-					printf("codec_data to short(2)!\n");
+					GST_WARNING_OBJECT (self, "codec_data to short(2)");
 			}
 			else if (cd_len <= 7)
-				printf("codec_data to short(1)!\n");
+				GST_WARNING_OBJECT (self, "codec_data to short(1)");
 			else
-				printf("wrong avcC version %d!\n", data[0]);
+				GST_WARNING_OBJECT (self, "wrong avcC version %d!", data[0]);
 		}
 		else
 			self->h264_nal_len_size = 0;
-		printf("MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1\n");
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-h264 VIDEO_SET_STREAMTYPE, 1");
 	} else if (!strcmp (mimetype, "video/x-h263")) {
 		streamtype = 2;
-		printf("MIMETYPE video/x-h263 VIDEO_SET_STREAMTYPE, 2\n");
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-h263 VIDEO_SET_STREAMTYPE, 2");
 	} else if (!strcmp (mimetype, "video/x-xvid")) {
 		streamtype = 10;
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 		self->must_pack_bitstream = 1;
 #endif
-		printf("MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10\n");
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10");
 	} else if (!strcmp (mimetype, "video/x-divx") || !strcmp (mimetype, "video/x-msmpeg")) {
 		gint divxversion = -1;
 		if (!gst_structure_get_int (structure, "divxversion", &divxversion) && !gst_structure_get_int (structure, "msmpegversion", &divxversion))
@@ -1173,12 +1166,12 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					B_SET_BITS("'100000'", 0x20, 5, 0);
 				streamtype = 13;
 				self->codec_type = CT_DIVX311;
-				printf("MIMETYPE video/x-divx vers. 3 -> VIDEO_SET_STREAMTYPE, 13\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/x-divx vers. 3 -> VIDEO_SET_STREAMTYPE, 13");
 			}
 			break;
 			case 4:
 				streamtype = 14;
-				printf("MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14");
 			break;
 			case 6:
 			case 5:
@@ -1186,7 +1179,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 				self->must_pack_bitstream = 1;
 #endif
-				printf("MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15\n");
+				GST_INFO_OBJECT (self, "MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15");
 			break;
 			default:
 				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled divx version %i", divxversion));
