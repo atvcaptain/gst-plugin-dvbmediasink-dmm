@@ -71,6 +71,8 @@
 
 #include <gst/gst.h>
 
+#include "gstdvbaudiosink.h"
+
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Poll is used to determine when the fd is ready for use. When the element state is changed,
  * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
@@ -79,26 +81,24 @@
 
 /* the poll call is also performed on the control sockets, that way
  * we can send special commands to unblock the select call */
-#define CONTROL_STOP						'S'		 /* stop the select call */
-#define CONTROL_SOCKETS(sink)	 sink->control_sock
-#define WRITE_SOCKET(sink)			sink->control_sock[1]
-#define READ_SOCKET(sink)			 sink->control_sock[0]
+#define CONTROL_STOP		'S'			/* stop the select call */
+#define CONTROL_SOCKETS(sink)	sink->control_sock
+#define WRITE_SOCKET(sink)	sink->control_sock[1]
+#define READ_SOCKET(sink)	sink->control_sock[0]
 
-#define SEND_COMMAND(sink, command)					\
-G_STMT_START {															\
-	unsigned char c; c = command;						 \
-	write (WRITE_SOCKET(sink), &c, 1);				 \
+#define SEND_COMMAND(sink, command)			\
+G_STMT_START {						\
+	unsigned char c; c = command;			\
+	write (WRITE_SOCKET(sink), &c, 1);		\
 } G_STMT_END
 
-#define READ_COMMAND(sink, command, res)				\
-G_STMT_START {																 \
-	res = read(READ_SOCKET(sink), &command, 1);	 \
+#define READ_COMMAND(sink, command, res)		\
+G_STMT_START {						\
+	res = read(READ_SOCKET(sink), &command, 1);	\
 } G_STMT_END
-
-#include "gstdvbaudiosink.h"
 
 #ifndef AUDIO_GET_PTS
-#define AUDIO_GET_PTS              _IOR('o', 19, gint64)
+#define AUDIO_GET_PTS		_IOR('o', 19, gint64)
 #endif
 
 GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
@@ -110,7 +110,8 @@ GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
 struct _GstDVBAudioSinkPrivate
 {
 
-  gboolean bypass_set;
+	gboolean bypass_set;
+	hardwaretype_t model;
 
 };
 
@@ -125,16 +126,18 @@ enum {
 	ARG_SILENT
 };
 
+guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
+
 static GstStaticPadTemplate sink_factory =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("audio/mpeg, "
-		"mpegversion = (int) { 1, 2, 4 }; "
-		"audio/x-private1-ac3; "
+	GST_STATIC_CAPS ("audio/mpeg; "
 		"audio/x-ac3; "
-		"audio/x-dts")
+		"audio/x-private1-ac3; "
+		"audio/x-dts; "
+		"audio/x-private1-dts" )
 );
 
 enum
@@ -152,12 +155,10 @@ enum
 #define DEBUG_INIT(bla) \
 	GST_DEBUG_CATEGORY_INIT (dvbaudiosink_debug, "dvbaudiosink", 0, "dvbaudiosink element");
 
-GST_BOILERPLATE_FULL (GstDVBAudioSink, gst_dvbaudiosink, GstBaseSink,
-	GST_TYPE_BASE_SINK, DEBUG_INIT);
+GST_BOILERPLATE_FULL (GstDVBAudioSink, gst_dvbaudiosink, GstBaseSink, GST_TYPE_BASE_SINK, DEBUG_INIT);
 
 static void	gst_dvbaudiosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
 static void	gst_dvbaudiosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
-
 static gboolean gst_dvbaudiosink_start (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
@@ -166,9 +167,9 @@ static gboolean gst_dvbaudiosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
+static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
 static GstClock * gst_dvbaudiosink_provide_clock (GstElement * elem);
 static GstClockTime  gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink);
-
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -211,6 +212,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
+	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
 	GST_ELEMENT_CLASS (klass)->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 }
@@ -232,6 +234,25 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	GST_BASE_SINK (klass)->sync = TRUE;
 
 	klass->provided_clock = gst_audio_clock_new ("GstDVBAudioSinkClock", (GstAudioClockGetTimeFunc) gst_dvbaudiosink_get_time, klass);
+
+	klass->priv->model = DMLEGACY;
+	int fd = open("/proc/stb/info/model", O_RDONLY);
+	if ( fd > 0 )
+	{
+		gchar string[8] = { 0, };
+		ssize_t rd = read(fd, string, 6);
+		if ( rd >= 5 )
+		{
+			if ( !strncasecmp(string, "DM7025", 6) )
+				klass->priv->model = DM7025;
+			else if ( !strncasecmp(string, "DM8000", 6) )
+				klass->priv->model = DM8000;
+			else if ( !strncasecmp(string, "DM800", 5) )
+				klass->priv->model = DM800;
+		}
+		close(fd);
+		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
+	}
 }
 
 static GstClock *
@@ -406,6 +427,94 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
 	return TRUE;
 }
 
+static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
+{
+	GstElementClass *element_class;
+	GstPadTemplate *pad_template;
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+	GstCaps *in_caps, *caps;
+
+	element_class = GST_ELEMENT_GET_CLASS (self);
+	pad_template = gst_element_class_get_pad_template(element_class, "sink");
+	g_return_val_if_fail (pad_template != NULL, NULL);
+	
+	in_caps = gst_caps_copy (gst_pad_template_get_caps (pad_template));
+	in_caps = gst_caps_make_writable (in_caps);
+
+	GstStructure *s;
+	gint i;
+	
+	caps = gst_caps_new_empty ();
+
+	for (i = 0; i < gst_caps_get_size (in_caps); ++i)
+	{	
+		s = gst_caps_get_structure (in_caps, i);
+		if ( gst_structure_has_name (s, "audio/mpeg") )
+		{
+			GstStructure *mp1_struct = gst_structure_copy (s);
+
+			gst_structure_set (mp1_struct, "mpegversion", G_TYPE_INT, 1, NULL);
+			gst_structure_set (mp1_struct, "layer", GST_TYPE_INT_RANGE, 1, 2, NULL);
+			gst_structure_set (mp1_struct, "rate", GST_TYPE_INT_RANGE, 0, 48000, NULL);
+			gst_caps_append_structure (caps, mp1_struct);
+
+			if ( self->priv->model >= DM800 )
+			{
+				GstStructure *mp3_struct = gst_structure_copy (s);
+				gst_structure_set (mp3_struct, "mpegversion", G_TYPE_INT, 1, NULL);
+				gst_structure_set (mp3_struct, "layer", G_TYPE_INT, 3, NULL);
+				GValue value = { 0 };
+				GValue rate_value = { 0 };
+				g_value_init (&rate_value, GST_TYPE_LIST);
+				g_value_init (&value, G_TYPE_INT);
+				g_value_set_int (&value, 44100);
+				gst_value_list_append_value (&rate_value, &value);
+				g_value_set_int (&value, 48000);
+				gst_value_list_append_value (&rate_value, &value);
+				gst_structure_set_value (mp3_struct, "rate", &rate_value);
+				g_value_unset (&value);
+				g_value_unset (&rate_value);
+				gst_caps_append_structure (caps, mp3_struct);
+	
+				GstStructure *mp2_struct = gst_structure_copy (s);
+				gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
+				g_value_init (&rate_value, GST_TYPE_LIST);
+				g_value_init (&value, G_TYPE_INT);
+				gint rate_idx=0;
+				do {
+					g_value_set_int (&value, AdtsSamplingRates[rate_idx]);
+					gst_value_list_append_value (&rate_value, &value);
+					++rate_idx;
+				} while (AdtsSamplingRates[rate_idx]);
+				gst_structure_set_value (mp2_struct, "rate", &rate_value);
+				g_value_unset (&value);
+				g_value_unset (&rate_value);
+				gst_caps_append_structure (caps, mp2_struct);
+	
+				GstStructure *mp4_struct = gst_structure_copy (mp2_struct);
+				gst_structure_set (mp4_struct, "mpegversion", G_TYPE_INT, 4, NULL);
+				gst_caps_append_structure (caps, mp4_struct);
+			}
+		}
+		if ( gst_structure_has_name (s, "audio/x-ac3" ) || gst_structure_has_name (s, "audio/x-private1-ac3" ) )
+		{
+			GstStructure *ac3_struct = gst_structure_copy (s);
+			gst_caps_append_structure (caps, ac3_struct);
+		}
+		if ( ( self->priv->model == DM8000 ) && ( gst_structure_has_name (s, "audio/x-dts" ) || gst_structure_has_name (s, "audio/x-private1-dts") ) )
+		{
+			GstStructure *dts_struct = gst_structure_copy (s);
+			gst_caps_append_structure (caps, dts_struct);
+		}
+	}
+
+	GST_DEBUG_OBJECT (self, "old caps: %s\nnew caps: %s\n", gst_caps_to_string(in_caps), gst_caps_to_string(caps));
+
+	gst_caps_unref (in_caps);
+
+	return caps;
+}
+
 static gboolean 
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
@@ -461,10 +570,6 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				}
 				else {
 					gint rate, channels, rate_idx=0, obj_type=1; // hardcoded yet.. hopefully this works every time ;)
-					gint AdtsSamplingRates[] = {
-						96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
-						16000, 12000, 11025, 8000, 7350, 0
-					};
 					GST_WARNING_OBJECT (self, "no codec data");
 					if (gst_structure_get_int (structure, "rate", &rate) && gst_structure_get_int (structure, "channels", &channels)) {
 						do {
@@ -523,8 +628,6 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	{
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 2;
-		GST_ELEMENT_ERROR (self, STREAM, CODEC_NOT_FOUND, (NULL), ("DTS not yet handled by driver"));
-		return FALSE;
 	} else
 	{
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));

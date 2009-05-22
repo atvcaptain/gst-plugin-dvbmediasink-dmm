@@ -75,6 +75,16 @@
 #define VIDEO_GET_PTS              _IOR('o', 57, gint64)
 #endif
 
+#define GST_DVBVIDEOSINK_GET_PRIVATE(obj)  \
+   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_DVBVIDEOSINK, GstDVBVideoSinkPrivate))
+
+struct _GstDVBVideoSinkPrivate
+{
+
+	hardwaretype_t model;
+
+};
+
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 struct bitstream
 {
@@ -140,20 +150,20 @@ void bitstream_put(struct bitstream *bit, unsigned long val, int bits)
 
 /* the select call is also performed on the control sockets, that way
  * we can send special commands to unblock the select call */
-#define CONTROL_STOP						'S'		 /* stop the select call */
-#define CONTROL_SOCKETS(sink)	 sink->control_sock
-#define WRITE_SOCKET(sink)			sink->control_sock[1]
-#define READ_SOCKET(sink)			 sink->control_sock[0]
+#define CONTROL_STOP		'S'			/* stop the select call */
+#define CONTROL_SOCKETS(sink)	sink->control_sock
+#define WRITE_SOCKET(sink)	sink->control_sock[1]
+#define READ_SOCKET(sink)	sink->control_sock[0]
 
-#define SEND_COMMAND(sink, command)					\
-G_STMT_START {															\
-	unsigned char c; c = command;						 \
-	write (WRITE_SOCKET(sink), &c, 1);				 \
+#define SEND_COMMAND(sink, command)			\
+G_STMT_START {						\
+	unsigned char c; c = command;			\
+	write (WRITE_SOCKET(sink), &c, 1);		\
 } G_STMT_END
 
-#define READ_COMMAND(sink, command, res)				\
-G_STMT_START {																 \
-	res = read(READ_SOCKET(sink), &command, 1);	 \
+#define READ_COMMAND(sink, command, res)		\
+G_STMT_START {						\
+	res = read(READ_SOCKET(sink), &command, 1);	\
 } G_STMT_END
 
 GST_DEBUG_CATEGORY_STATIC (dvbvideosink_debug);
@@ -203,20 +213,16 @@ GST_STATIC_PAD_TEMPLATE (
 GST_BOILERPLATE_FULL (GstDVBVideoSink, gst_dvbvideosink, GstBaseSink,
 	GST_TYPE_BASE_SINK, DEBUG_INIT);
 
-static void	gst_dvbvideosink_set_property (GObject *object, guint prop_id,
-																									const GValue *value,
-																									GParamSpec *pspec);
-static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id,
-																									GValue *value,
-																									GParamSpec *pspec);
+static void	gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
+static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
 
 static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
-static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink,
-	GstBuffer * buffer);
+static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer);
 static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
+static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
 
@@ -243,14 +249,14 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 	GstBaseSinkClass *gstbasesink_class = GST_BASE_SINK_CLASS (klass);
+	g_type_class_add_private (klass, sizeof (GstDVBVideoSinkPrivate));
 	
 	gobject_class->set_property = gst_dvbvideosink_set_property;
 	gobject_class->get_property = gst_dvbvideosink_get_property;
 	
 	gobject_class = G_OBJECT_CLASS (klass);
 	g_object_class_install_property (gobject_class, ARG_SILENT,
-		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?",
-													FALSE, G_PARAM_READWRITE));
+		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
 
 	gstbasesink_class->get_times = NULL;
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbvideosink_start);
@@ -260,6 +266,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
+	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
 
@@ -271,9 +278,9 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
  * initialize structure
  */
 static void
-gst_dvbvideosink_init (GstDVBVideoSink *klass,
-		GstDVBVideoSinkClass * gclass)
+gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 {
+	klass->priv = GST_DVBVIDEOSINK_GET_PRIVATE (klass);
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "r");
 	klass->dec_running = FALSE;
 	klass->silent = FALSE;
@@ -292,6 +299,26 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass,
 		fgets(klass->saved_fallback_framerate, 16, f);
 		fclose(f);
 	}
+
+	klass->priv->model = DMLEGACY;
+	int fd = open("/proc/stb/info/model", O_RDONLY);
+	if ( fd > 0 )
+	{
+		gchar string[8] = { 0, };
+		ssize_t rd = read(fd, string, 6);
+		if ( rd >= 5 )
+		{
+			if ( !strncasecmp(string, "DM7025", 6) )
+				klass->priv->model = DM7025;
+			else if ( !strncasecmp(string, "DM8000", 6) )
+				klass->priv->model = DM8000;
+			else if ( !strncasecmp(string, "DM800", 5) )
+				klass->priv->model = DM800;
+		}
+		close(fd);
+		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
+	}
+
 	GST_BASE_SINK (klass)->sync = TRUE;
 }
 
@@ -315,8 +342,7 @@ gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *val
 }
 
 static void
-gst_dvbvideosink_get_property (GObject *object, guint prop_id,
-																	GValue *value, GParamSpec *pspec)
+gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
 {
 	GstDVBVideoSink *sink;
 
@@ -1004,6 +1030,74 @@ stopped:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		return GST_FLOW_WRONG_STATE;
 	}
+}
+
+static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * basesink)
+{
+	GstElementClass *element_class;
+	GstPadTemplate *pad_template;
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	GstCaps *in_caps, *caps;
+
+	element_class = GST_ELEMENT_GET_CLASS (self);
+	pad_template = gst_element_class_get_pad_template(element_class, "sink");
+	g_return_val_if_fail (pad_template != NULL, NULL);
+	
+	in_caps = gst_caps_copy (gst_pad_template_get_caps (pad_template));
+	in_caps = gst_caps_make_writable (in_caps);
+
+	GstStructure *s;
+	gint i;
+	
+	caps = gst_caps_new_empty ();
+
+	for (i = 0; i < gst_caps_get_size (in_caps); ++i)
+	{	
+		s = gst_caps_get_structure (in_caps, i);
+		if ( gst_structure_has_name (s, "video/mpeg") )
+		{
+			GstStructure *mp1_struct = gst_structure_copy (s);
+			gst_structure_set (mp1_struct, "mpegversion", G_TYPE_INT, 1, NULL);
+			gst_caps_append_structure (caps, mp1_struct);
+
+			GstStructure *mp2_struct = gst_structure_copy (s);
+			gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
+			gst_caps_append_structure (caps, mp2_struct);
+
+			if ( self->priv->model >= DM800 )
+			{
+				GstStructure *mp4_struct = gst_structure_copy (s);
+				gst_structure_set (mp4_struct, "mpegversion", G_TYPE_INT, 4, NULL);
+				gst_caps_append_structure (caps, mp4_struct);
+			}
+		}
+		if ( gst_structure_has_name (s, "video/x-h264" ) && ( self->priv->model >= DM800 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
+		if ( gst_structure_has_name (s, "video/x-h263" ) && ( self->priv->model >= DM8000 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
+		if ( gst_structure_has_name (s, "video/x-msmpeg" ) && ( self->priv->model >= DM8000 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
+		if ( gst_structure_has_name (s, "video/x-divx" ) && ( self->priv->model >= DM8000 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
+		if ( gst_structure_has_name (s, "video/x-xvid" ) && ( self->priv->model >= DM8000 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
+	}
+
+	GST_DEBUG_OBJECT (self, "old caps: %s\nnew caps: %s\n", gst_caps_to_string(in_caps), gst_caps_to_string(caps));
+
+	gst_caps_unref (in_caps);
+
+	return caps;
 }
 
 static gboolean 

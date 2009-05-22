@@ -70,6 +70,7 @@ typedef struct _GstDVBAudioSink		GstDVBAudioSink;
 typedef struct _GstDVBAudioSinkClass	GstDVBAudioSinkClass;
 typedef struct _GstDVBAudioSinkPrivate	GstDVBAudioSinkPrivate;
 
+typedef enum { DMLEGACY, DM7025, DM800, DM8000 } hardwaretype_t;
 
 struct _GstDVBAudioSink
 {
