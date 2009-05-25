@@ -467,6 +467,8 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
 				GValue rate_value = { 0 };
 				g_value_init (&rate_value, GST_TYPE_LIST);
 				g_value_init (&value, G_TYPE_INT);
+				g_value_set_int (&value, 32000);
+				gst_value_list_append_value (&rate_value, &value);
 				g_value_set_int (&value, 44100);
 				gst_value_list_append_value (&rate_value, &value);
 				g_value_set_int (&value, 48000);
