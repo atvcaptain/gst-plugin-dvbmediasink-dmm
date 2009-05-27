@@ -219,6 +219,7 @@ static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValu
 static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
+static GstFlowReturn gst_dvbvideosink_preroll (GstBaseSink * sink, GstBuffer * buffer);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer);
 static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
@@ -267,6 +268,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
+	gstbasesink_class->preroll = GST_DEBUG_FUNCPTR (gst_dvbvideosink_preroll);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
 
@@ -1372,44 +1374,6 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 	fcntl (READ_SOCKET (self), F_SETFL, O_NONBLOCK);
 	fcntl (WRITE_SOCKET (self), F_SETFL, O_NONBLOCK);
 
-	if (self->fd >= 0)
-	{
-		GstStructure *s = 0;
-		GstMessage *msg = 0;
-		int aspect = -1, width = -1, height = -1, framerate = -1,
-			progressive = readMpegProc("progressive", 0);
-
-		if (readApiSize(self->fd, &width, &height, &aspect) == -1)
-		{
-			aspect = readMpegProc("aspect", 0);
-			width = readMpegProc("xres", 0);
-			height = readMpegProc("yres", 0);
-		}
-		else
-			aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
-		if (readApiFrameRate(self->fd, &framerate) == -1)
-			framerate = readMpegProc("framerate", 0);
-
-		s = gst_structure_new ("eventSizeAvail",
-			"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
-			"width", G_TYPE_INT, width,
-			"height", G_TYPE_INT, height, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
-		s = gst_structure_new ("eventFrameRateAvail",
-			"frame_rate", G_TYPE_INT, framerate, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
-		s = gst_structure_new ("eventProgressiveAvail",
-			"progressive", G_TYPE_INT, progressive, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
-		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
-	}
-
 	return TRUE;
 	/* ERRORS */
 socket_pair:
@@ -1457,6 +1421,54 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	}
 
 	return TRUE;
+}
+
+static GstFlowReturn
+gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
+{
+	GstFlowReturn res = GST_FLOW_OK;
+	GstDVBVideoSink *sink;
+	sink = GST_DVBVIDEOSINK (basesink);
+
+	if (sink->fd >= 0)
+	{
+		GstStructure *s = 0;
+		GstMessage *msg = 0;
+		int aspect = -1, width = -1, height = -1, framerate = -1,
+			progressive = readMpegProc("progressive", 0);
+
+		if (readApiSize(sink->fd, &width, &height, &aspect) == -1)
+		{
+			aspect = readMpegProc("aspect", 0);
+			width = readMpegProc("xres", 0);
+			height = readMpegProc("yres", 0);
+		}
+		else
+			aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
+		if (readApiFrameRate(sink->fd, &framerate) == -1)
+			framerate = readMpegProc("framerate", 0);
+
+		s = gst_structure_new ("eventSizeAvail",
+			"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
+			"width", G_TYPE_INT, width,
+			"height", G_TYPE_INT, height, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
+		s = gst_structure_new ("eventFrameRateAvail",
+			"frame_rate", G_TYPE_INT, framerate, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
+		s = gst_structure_new ("eventProgressiveAvail",
+			"progressive", G_TYPE_INT, progressive, NULL);
+		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+		gst_element_post_message (GST_ELEMENT (basesink), msg);
+
+		ioctl(sink->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
+	}
+
+	return res;
 }
 
 /* entry point to initialize the plug-in
