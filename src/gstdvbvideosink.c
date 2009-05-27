@@ -677,10 +677,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					if (self->codec_type == CT_DIVX311)
 						write(self->fd, codec_data, codec_data_len);
 					else {
-						if (pes_header[0] || pes_header[1] || pes_header[2] != 1) {
-							memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
-							pes_header_len += 3;
-						}
 						memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
 						pes_header_len += codec_data_len;
 					}
@@ -1374,6 +1370,9 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 	fcntl (READ_SOCKET (self), F_SETFL, O_NONBLOCK);
 	fcntl (WRITE_SOCKET (self), F_SETFL, O_NONBLOCK);
 
+	if (self->fd >= 0)
+		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
+
 	return TRUE;
 	/* ERRORS */
 socket_pair:
@@ -1464,8 +1463,6 @@ gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
 			"progressive", G_TYPE_INT, progressive, NULL);
 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
 		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
-		ioctl(sink->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
 	}
 
 	return res;
