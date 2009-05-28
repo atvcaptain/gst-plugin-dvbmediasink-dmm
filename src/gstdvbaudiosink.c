@@ -882,13 +882,25 @@ static gboolean
 gst_dvbaudiosink_start (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+	gint control_sock[2];
+	int val = 1;
 	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
-	
-	gint control_sock[2];
 
-	if (socketpair (PF_UNIX, SOCK_STREAM, 0, control_sock) < 0)
+	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {
+		perror("socketpair");
 		goto socket_pair;
+	}
+
+	if (setsockopt(control_sock[0], SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+		perror("setsockopt");
+		goto socket_pair;
+	}
+
+	if (setsockopt(control_sock[1], SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+		perror("setsockopt");
+		goto socket_pair;
+	}
 
 	READ_SOCKET (self) = control_sock[0];
 	WRITE_SOCKET (self) = control_sock[1];
@@ -933,6 +945,9 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 
 	if (self->prev_data)
 		gst_buffer_unref(self->prev_data);
+
+	close(READ_SOCKET(self));
+	close(WRITE_SOCKET(self));
 
 	return TRUE;
 }

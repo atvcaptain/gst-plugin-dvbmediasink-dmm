@@ -1356,13 +1356,25 @@ static gboolean
 gst_dvbvideosink_start (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	gint control_sock[2];
+	int val = -1;
 	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
 
-	gint control_sock[2];
-
-	if (socketpair (PF_UNIX, SOCK_STREAM, 0, control_sock) < 0)
+	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {
+		perror("socketpair");
 		goto socket_pair;
+	}
+
+	if (setsockopt(control_sock[0], SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+		perror("setsockopt");
+		goto socket_pair;
+	}
+
+	if (setsockopt(control_sock[1], SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+		perror("setsockopt");
+		goto socket_pair;
+	}
 
 	READ_SOCKET (self) = control_sock[0];
 	WRITE_SOCKET (self) = control_sock[1];
@@ -1418,6 +1430,9 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 		fputs(self->saved_fallback_framerate, f);
 		fclose(f);
 	}
+
+	close(READ_SOCKET(self));
+	close(WRITE_SOCKET(self));
 
 	return TRUE;
 }
