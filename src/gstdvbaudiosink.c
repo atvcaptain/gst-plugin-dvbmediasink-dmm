@@ -170,6 +170,7 @@ static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
 static GstClock * gst_dvbaudiosink_provide_clock (GstElement * elem);
 static GstClockTime  gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink);
+static void gst_dvbaudiosink_dispose (GObject * object);
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -213,6 +214,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
+	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
 	GST_ELEMENT_CLASS (klass)->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 }
@@ -253,6 +255,24 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 		close(fd);
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
 	}
+}
+
+static void gst_dvbaudiosink_dispose (GObject * object)
+{
+	GstDVBAudioSink *self;
+	
+	self = GST_DVBAUDIOSINK (object);
+	
+	if (self->provided_clock)
+		gst_object_unref (self->provided_clock);
+	self->provided_clock = NULL;
+
+	close (READ_SOCKET (self));
+	close (WRITE_SOCKET (self));
+	READ_SOCKET (self) = -1;
+	WRITE_SOCKET (self) = -1;
+
+	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
 static GstClock *
@@ -945,9 +965,6 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 
 	if (self->prev_data)
 		gst_buffer_unref(self->prev_data);
-
-	close(READ_SOCKET(self));
-	close(WRITE_SOCKET(self));
 
 	return TRUE;
 }

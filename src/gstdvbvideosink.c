@@ -215,7 +215,6 @@ GST_BOILERPLATE_FULL (GstDVBVideoSink, gst_dvbvideosink, GstBaseSink,
 
 static void	gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
 static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
-
 static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
@@ -226,6 +225,7 @@ static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
+static void gst_dvbvideosink_dispose (GObject * object);
 
 
 static void
@@ -269,6 +269,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 	gstbasesink_class->preroll = GST_DEBUG_FUNCPTR (gst_dvbvideosink_preroll);
+	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbvideosink_dispose);
 	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 }
 
@@ -322,6 +323,20 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 	}
 
 	GST_BASE_SINK (klass)->sync = TRUE;
+}
+
+static void gst_dvbvideosink_dispose (GObject * object)
+{
+	GstDVBVideoSink *self;
+	
+	self = GST_DVBVIDEOSINK (object);
+	
+	close (READ_SOCKET (self));
+	close (WRITE_SOCKET (self));
+	READ_SOCKET (self) = -1;
+	WRITE_SOCKET (self) = -1;
+
+	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
 static void
@@ -1430,9 +1445,6 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 		fputs(self->saved_fallback_framerate, f);
 		fclose(f);
 	}
-
-	close(READ_SOCKET(self));
-	close(WRITE_SOCKET(self));
 
 	return TRUE;
 }
