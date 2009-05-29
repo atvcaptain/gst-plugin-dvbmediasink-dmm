@@ -827,7 +827,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (self->is_dts) {
 		int pos=0;
 		while((pos+3) < size) {
-			if (strcmp((char*)(data+pos), "\x64\x58\x20\x25")) {  // is DTS-HD ?
+			if (!strcmp((char*)(data+pos), "\x64\x58\x20\x25")) {  // is DTS-HD ?
+				skip += (size - pos);
 				size = pos;
 				break;
 			}
