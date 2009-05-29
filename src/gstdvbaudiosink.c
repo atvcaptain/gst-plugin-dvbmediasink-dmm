@@ -546,6 +546,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	int bypass = -1;
 
 	self->skip = 0;
+	self->is_dts = 0;
 	if (!strcmp(type, "audio/mpeg")) {
 		gint mpegversion;
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
@@ -639,6 +640,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 2;
 		self->skip = 2;
+		self->is_dts = 1;
 	}
 	else if (!strcmp(type, "audio/x-private1-ac3"))
 	{
@@ -650,6 +652,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	{
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 2;
+		self->is_dts = 1;
 	} else
 	{
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
@@ -820,6 +823,17 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	pes_header[1] = 0;
 	pes_header[2] = 1;
 	pes_header[3] = 0xC0;
+
+	if (self->is_dts) {
+		int pos=0;
+		while((pos+3) < size) {
+			if (strcmp((char*)(data+pos), "\x64\x58\x20\x25")) {  // is DTS-HD ?
+				size = pos;
+				break;
+			}
+			++pos;
+		}
+	}
 
 	if (self->aac_adts_header_valid)
 		size += 7;

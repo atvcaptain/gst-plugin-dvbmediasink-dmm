@@ -81,6 +81,7 @@ struct _GstDVBAudioSink
 	gint control_sock[2];
 
 	gboolean silent;
+	gboolean is_dts;
 	int fd;
 	int skip;
 
