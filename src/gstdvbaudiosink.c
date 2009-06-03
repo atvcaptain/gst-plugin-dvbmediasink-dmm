@@ -663,6 +663,10 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
 	{
+		if (self->is_dts) {
+			GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("hardware decoder can't be set to bypass mode type %s", type));
+			return FALSE;
+		}
 		GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
 // 		return FALSE;
 	}
