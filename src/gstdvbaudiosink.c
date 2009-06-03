@@ -487,12 +487,17 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
 				GValue rate_value = { 0 };
 				g_value_init (&rate_value, GST_TYPE_LIST);
 				g_value_init (&value, G_TYPE_INT);
-				g_value_set_int (&value, 32000);
-				gst_value_list_append_value (&rate_value, &value);
-				g_value_set_int (&value, 44100);
-				gst_value_list_append_value (&rate_value, &value);
-				g_value_set_int (&value, 48000);
-				gst_value_list_append_value (&rate_value, &value);
+				gint rate_idx=0;
+				do {
+					int rate = AdtsSamplingRates[rate_idx];
+					++rate_idx;
+					if ( rate > 48000 )
+						continue;
+					else if ( rate < 8000 )
+						break;
+					g_value_set_int (&value, rate);
+					gst_value_list_append_value (&rate_value, &value);
+				} while (AdtsSamplingRates[rate_idx]);
 				gst_structure_set_value (mp3_struct, "rate", &rate_value);
 				g_value_unset (&value);
 				g_value_unset (&rate_value);
@@ -502,7 +507,7 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
 				gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
 				g_value_init (&rate_value, GST_TYPE_LIST);
 				g_value_init (&value, G_TYPE_INT);
-				gint rate_idx=0;
+				rate_idx=0;
 				do {
 					g_value_set_int (&value, AdtsSamplingRates[rate_idx]);
 					gst_value_list_append_value (&rate_value, &value);
