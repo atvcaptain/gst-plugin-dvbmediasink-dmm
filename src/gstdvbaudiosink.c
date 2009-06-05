@@ -242,7 +242,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	if ( fd > 0 )
 	{
 		gchar string[8] = { 0, };
-		ssize_t rd = read(fd, string, 6);
+		ssize_t rd = read(fd, string, 7);
 		if ( rd >= 5 )
 		{
 			if ( !strncasecmp(string, "DM7025", 6) )
@@ -251,6 +251,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 				klass->priv->model = DM8000;
 			else if ( !strncasecmp(string, "DM800", 5) )
 				klass->priv->model = DM800;
+			else if ( !strncasecmp(string, "DM500HD", 7) )
+				klass->priv->model = DM500HD;
 		}
 		close(fd);
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
