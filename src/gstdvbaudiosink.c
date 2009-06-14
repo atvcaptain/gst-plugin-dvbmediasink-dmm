@@ -194,16 +194,13 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 	GstBaseSinkClass *gstbasesink_class = GST_BASE_SINK_CLASS (klass);
+	GstElementClass *gelement_class = GST_ELEMENT_CLASS (klass);
+
 	g_type_class_add_private (klass, sizeof (GstDVBAudioSinkPrivate));
-	
-	gobject_class->set_property = gst_dvbaudiosink_set_property;
-	gobject_class->get_property = gst_dvbaudiosink_get_property;
-	
-	gobject_class = G_OBJECT_CLASS (klass);
-	g_object_class_install_property (gobject_class, ARG_SILENT, g_param_spec_boolean
-		("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
-	g_object_class_install_property (gobject_class, PROP_PROVIDE_CLOCK, g_param_spec_boolean
-		("provide-clock", "Provide Clock", "Provide a clock to be used as the global pipeline clock", DEFAULT_PROVIDE_CLOCK, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_property);
+	gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_property);
+	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
 
 	gstbasesink_class->get_times = NULL;
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_start);
@@ -214,9 +211,14 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
-	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
-	GST_ELEMENT_CLASS (klass)->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
-	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
+
+	gelement_class->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
+	gelement_class->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
+
+	g_object_class_install_property (gobject_class, ARG_SILENT, g_param_spec_boolean
+		("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
+	g_object_class_install_property (gobject_class, PROP_PROVIDE_CLOCK, g_param_spec_boolean
+		("provide-clock", "Provide Clock", "Provide a clock to be used as the global pipeline clock", DEFAULT_PROVIDE_CLOCK, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 /* initialize the new element
@@ -579,8 +581,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
 					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
 					guint8 channels = (h[1] & 0x78) >> 3;
-//					printf("have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-//						obj_type, rate_idx, channels);
+					GST_INFO_OBJECT (self, "have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+						obj_type, rate_idx, channels);
 					/* Sync point over a full byte */
 					self->aac_adts_header[0] = 0xFF;
 					/* Sync point continued over first 4 bits + static 4 bits
@@ -600,7 +602,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				}
 				else {
 					gint rate, channels, rate_idx=0, obj_type=1; // hardcoded yet.. hopefully this works every time ;)
-					GST_WARNING_OBJECT (self, "no codec data");
+					GST_INFO_OBJECT (self, "no codec data");
 					if (gst_structure_get_int (structure, "rate", &rate) && gst_structure_get_int (structure, "channels", &channels)) {
 						do {
 							if (AdtsSamplingRates[rate_idx] == rate)

@@ -250,14 +250,12 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 	GstBaseSinkClass *gstbasesink_class = GST_BASE_SINK_CLASS (klass);
+	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
 	g_type_class_add_private (klass, sizeof (GstDVBVideoSinkPrivate));
-	
-	gobject_class->set_property = gst_dvbvideosink_set_property;
-	gobject_class->get_property = gst_dvbvideosink_get_property;
-	
-	gobject_class = G_OBJECT_CLASS (klass);
-	g_object_class_install_property (gobject_class, ARG_SILENT,
-		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
+
+	gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_property);
+	gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_property);
+	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbvideosink_dispose);
 
 	gstbasesink_class->get_times = NULL;
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbvideosink_start);
@@ -269,8 +267,11 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 	gstbasesink_class->preroll = GST_DEBUG_FUNCPTR (gst_dvbvideosink_preroll);
-	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbvideosink_dispose);
-	GST_ELEMENT_CLASS (klass)->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
+
+	element_class->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
+
+	g_object_class_install_property (gobject_class, ARG_SILENT,
+		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
 }
 
 #define H264_BUFFER_SIZE (64*1024+2048)
@@ -505,7 +506,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //	for (;i < (data_len > 0xF ? 0xF : data_len); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", data_len);
-
 //	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	FD_ZERO (&readfds);
@@ -653,7 +653,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			if (data_len - pos < 13)
 				break;
 			if (sscanf((char*)data+pos, "DivX%d%c%d%cp", &tmp1, &c1, &tmp2, &c2) == 4 && (c1 == 'b' || c1 == 'B') && (c2 == 'p' || c2 == 'P')) {
-				GST_DEBUG_OBJECT (self, "%s seen... already packed!", (char*)data+pos);
+				GST_INFO_OBJECT (self, "%s seen... already packed!", (char*)data+pos);
 				self->must_pack_bitstream = 0;
 			}
 //			if (self->must_pack_bitstream)
