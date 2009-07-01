@@ -204,6 +204,8 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/x-divx, "
 	COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
 		"video/x-xvid, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-3ivx, "
 	COMMON_VIDEO_CAPS "; ")
 );
 
@@ -1106,6 +1108,10 @@ static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * basesink)
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
+		if ( gst_structure_has_name (s, "video/x-3ivx" ) && ( self->priv->model > DM800 ) )
+		{
+			gst_caps_append_structure (caps, gst_structure_copy (s));
+		}
 	}
 
 	GST_DEBUG_OBJECT (self, "old caps: %s\nnew caps: %s\n", gst_caps_to_string(in_caps), gst_caps_to_string(caps));
@@ -1154,6 +1160,16 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled mpeg version %i", mpegversion));
 			break;
 		}
+	} else if (!strcmp (mimetype, "video/x-3ivx")) {
+		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+		if (codec_data) {
+			GST_INFO_OBJECT (self, "have 3ivx codec... handle as CT_MPEG4_PART2");
+			self->codec_data = gst_value_get_buffer (codec_data);
+			self->codec_type = CT_MPEG4_PART2;
+			gst_buffer_ref (self->codec_data);
+		}
+		streamtype = 4;
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-3ivx -> VIDEO_SET_STREAMTYPE, 4");
 	} else if (!strcmp (mimetype, "video/x-h264")) {
 		const GValue *cd_data = gst_structure_get_value (structure, "codec_data");
 		streamtype = 1;
@@ -1471,12 +1487,10 @@ gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
 			"height", G_TYPE_INT, height, NULL);
 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
 		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
 		s = gst_structure_new ("eventFrameRateAvail",
 			"frame_rate", G_TYPE_INT, framerate, NULL);
 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
 		gst_element_post_message (GST_ELEMENT (basesink), msg);
-
 		s = gst_structure_new ("eventProgressiveAvail",
 			"progressive", G_TYPE_INT, progressive, NULL);
 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
