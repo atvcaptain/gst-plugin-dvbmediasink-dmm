@@ -1,5 +1,4 @@
-/*
- * GStreamer DVB Media Sink
+/* GStreamer DVB Media Sink
  * Copyright 2006 Felix Domke <tmbinc@elitedvb.net>
  * based on code by:
  * Copyright 2005 Thomas Vander Stichele <thomas@apestaart.org>
@@ -423,6 +422,7 @@ static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * sink)
 {
+#if 0
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
 	while (TRUE)
 	{
@@ -437,6 +437,7 @@ static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * sink)
 		break;
 		}
 	}
+#endif
 	return TRUE;
 }
 
@@ -448,14 +449,11 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
-		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
-		self->must_send_header = TRUE;
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_FLUSH_STOP:
-		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
-		self->must_send_header = TRUE;
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
-
 	case GST_EVENT_NEWSEGMENT:{
 		GstFormat fmt;
 		gboolean update;
@@ -485,30 +483,22 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	return TRUE;
 }
 
-static GstFlowReturn
-gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
+#define ASYNC_WRITE(data, len) do { \
+		switch(AsyncWrite(sink, self, data, len)) { \
+		case -1: goto select_error; \
+		case -2: goto stopped; \
+		case -3: goto write_error; \
+		default: break; \
+		} \
+	} while(0)
+
+static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *data, unsigned int len)
 {
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
-	unsigned char *data = GST_BUFFER_DATA(buffer);
-	unsigned int data_len = GST_BUFFER_SIZE (buffer);
-	guint8 pes_header[2048];
-	unsigned int pes_header_len=0;
-	unsigned int payload_len=0;
+	unsigned int written=0;
+
 	fd_set readfds;
 	fd_set writefds;
 	fd_set priofds;
-	gint retval;
-//	int i=0;
-
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
-	gboolean commit_prev_frame_data = FALSE,
-			cache_prev_frame = FALSE;
-#endif
-
-//	for (;i < (data_len > 0xF ? 0xF : data_len); ++i)
-//		printf("%02x ", data[i]);
-//	printf("%d bytes\n", data_len);
-//	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
 	FD_ZERO (&readfds);
 	FD_SET (READ_SOCKET (self), &readfds);
@@ -521,67 +511,95 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	do {
 		GST_LOG_OBJECT (self, "going into select, have %d bytes to write",
-				data_len);
-		retval = select (FD_SETSIZE, &readfds, &writefds, &priofds, NULL);
-	} while ((retval == -1 && errno == EINTR));
-
-	if (retval == -1)
-		goto select_error;
-
-	if (FD_ISSET (READ_SOCKET (self), &readfds)) {
-		/* read all stop commands */
-		while (TRUE) {
-			gchar command;
-			int res;
-
-			READ_COMMAND (self, command, res);
-			if (res < 0) {
-				GST_LOG_OBJECT (self, "no more commands");
-				/* no more commands */
-				break;
+				len);
+		if (select (FD_SETSIZE, &readfds, &writefds, &priofds, NULL) == -1) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (FD_ISSET (READ_SOCKET (self), &readfds)) {
+			/* read all stop commands */
+			while (TRUE) {
+				gchar command;
+				int res;
+				READ_COMMAND (self, command, res);
+				if (res < 0) {
+					
+					GST_LOG_OBJECT (self, "no more commands");
+					/* no more commands */
+					break;
+				}
+			}
+			return -2;
+		}
+		if (FD_ISSET (self->fd, &priofds)) {
+			GstStructure *s;
+			GstMessage *msg;
+			struct video_event evt;
+			if (ioctl(self->fd, VIDEO_GET_EVENT, &evt) < 0)
+				g_warning ("failed to ioctl VIDEO_GET_EVENT!");
+			else {
+				GST_INFO_OBJECT (self, "VIDEO_EVENT %d", evt.type);
+				if (evt.type == VIDEO_EVENT_SIZE_CHANGED) {
+					s = gst_structure_new ("eventSizeChanged",
+						"aspect_ratio", G_TYPE_INT, evt.u.size.aspect_ratio == 0 ? 2 : 3,
+						"width", G_TYPE_INT, evt.u.size.w,
+						"height", G_TYPE_INT, evt.u.size.h, NULL);
+					msg = gst_message_new_element (GST_OBJECT (sink), s);
+					gst_element_post_message (GST_ELEMENT (sink), msg);
+				} else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED) {
+					s = gst_structure_new ("eventFrameRateChanged",
+						"frame_rate", G_TYPE_INT, evt.u.frame_rate, NULL);
+					msg = gst_message_new_element (GST_OBJECT (sink), s);
+					gst_element_post_message (GST_ELEMENT (sink), msg);
+				} else if (evt.type == 16 /*VIDEO_EVENT_PROGRESSIVE_CHANGED*/) {
+					s = gst_structure_new ("eventProgressiveChanged",
+						"progressive", G_TYPE_INT, evt.u.frame_rate, NULL);
+					msg = gst_message_new_element (GST_OBJECT (sink), s);
+					gst_element_post_message (GST_ELEMENT (sink), msg);
+				} else
+					g_warning ("unhandled DVBAPI Video Event %d", evt.type);
 			}
 		}
-		goto stopped;
-	}
-
-	if (FD_ISSET (self->fd, &priofds))
-	{
-		GstStructure *s;
-		GstMessage *msg;
-
-		struct video_event evt;
-		if (ioctl(self->fd, VIDEO_GET_EVENT, &evt) < 0)
-			g_warning ("failed to ioctl VIDEO_GET_EVENT!");
-		else
-		{
-			GST_INFO_OBJECT (self, "VIDEO_EVENT %d", evt.type);
-			if (evt.type == VIDEO_EVENT_SIZE_CHANGED)
-			{
-				s = gst_structure_new ("eventSizeChanged",
-					"aspect_ratio", G_TYPE_INT, evt.u.size.aspect_ratio == 0 ? 2 : 3,
-					"width", G_TYPE_INT, evt.u.size.w,
-					"height", G_TYPE_INT, evt.u.size.h, NULL);
-				msg = gst_message_new_element (GST_OBJECT (sink), s);
-				gst_element_post_message (GST_ELEMENT (sink), msg);
+		if (FD_ISSET (self->fd, &writefds)) {
+			int wr = write(self->fd, data+written, len - written);
+			if (wr < 0) {
+				switch (errno) {
+					case EINTR:
+					case EAGAIN:
+						break;
+					default:
+						return -3;
+				}
 			}
-			else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED)
-			{
-				s = gst_structure_new ("eventFrameRateChanged",
-					"frame_rate", G_TYPE_INT, evt.u.frame_rate, NULL);
-				msg = gst_message_new_element (GST_OBJECT (sink), s);
-				gst_element_post_message (GST_ELEMENT (sink), msg);
-			}
-			else if (evt.type == 16 /*VIDEO_EVENT_PROGRESSIVE_CHANGED*/)
-			{
-				s = gst_structure_new ("eventProgressiveChanged",
-					"progressive", G_TYPE_INT, evt.u.frame_rate, NULL);
-				msg = gst_message_new_element (GST_OBJECT (sink), s);
-				gst_element_post_message (GST_ELEMENT (sink), msg);
-			}
-			else
-				g_warning ("unhandled DVBAPI Video Event %d", evt.type);
+			written += wr;
 		}
-	}
+	} while (written != len);
+
+	return 0;
+}
+
+static GstFlowReturn
+gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
+{
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
+	unsigned char *data = GST_BUFFER_DATA(buffer);
+	unsigned int data_len = GST_BUFFER_SIZE (buffer);
+	guint8 pes_header[2048];
+	unsigned int pes_header_len=0;
+	unsigned int payload_len=0;
+//	int i=0;
+
+#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+	gboolean commit_prev_frame_data = FALSE,
+			cache_prev_frame = FALSE;
+#endif
+
+//	for (;i < (data_len > 0xF ? 0xF : data_len); ++i)
+//		printf("%02x ", data[i]);
+//	printf("%d bytes\n", data_len);
+//	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
+
 
 	if (self->fd < 0)
 		return GST_FLOW_OK;
@@ -694,7 +712,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
 					if (self->codec_type == CT_DIVX311)
-						write(self->fd, codec_data, codec_data_len);
+						ASYNC_WRITE(codec_data, codec_data_len);
 					else {
 						memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
 						pes_header_len += codec_data_len;
@@ -991,10 +1009,10 @@ leave:
 					pes_header[4] = 0;
 					pes_header[5] = 0;
 				}
-				write(self->fd, pes_header, pes_header_len);
-				write(self->fd, data, pos);
-				write(self->fd, codec_data, codec_data_len);
-				write(self->fd, data+pos, data_len - pos);
+				ASYNC_WRITE(pes_header, pes_header_len);
+				ASYNC_WRITE(data, pos);
+				ASYNC_WRITE(codec_data, codec_data_len);
+				ASYNC_WRITE(data+pos, data_len - pos);
 				self->must_send_header = FALSE;
 				return GST_FLOW_OK;
 			}
@@ -1010,12 +1028,12 @@ leave:
 		pes_header[5] = 0;
 	}
 
-	write(self->fd, pes_header, pes_header_len);
+	ASYNC_WRITE(pes_header, pes_header_len);
 
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (commit_prev_frame_data) {
 //		printf("commit prev frame data\n");
-		write(self->fd, GST_BUFFER_DATA (self->prev_frame), GST_BUFFER_SIZE (self->prev_frame));
+		ASYNC_WRITE(GST_BUFFER_DATA (self->prev_frame), GST_BUFFER_SIZE (self->prev_frame));
 	}
 
 	if (self->prev_frame && self->prev_frame != buffer) {
@@ -1031,7 +1049,7 @@ leave:
 	}
 #endif
 
-	write(self->fd, data, data_len);
+	ASYNC_WRITE(data, data_len);
 
 	return GST_FLOW_OK;
 select_error:
@@ -1041,11 +1059,19 @@ select_error:
 		GST_WARNING_OBJECT (self, "Error during select");
 		return GST_FLOW_ERROR;
 	}
+write_error:
+	{
+		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
+				("write on file descriptor: %s.", g_strerror (errno)));
+		GST_WARNING_OBJECT (self, "Error during write");
+		return GST_FLOW_ERROR;
+	}
 stopped:
 	{
 		GST_WARNING_OBJECT (self, "Select stopped");
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
-		return GST_FLOW_WRONG_STATE;
+		self->must_send_header = TRUE;
+		return GST_FLOW_OK;
 	}
 }
 
@@ -1390,7 +1416,7 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	gint control_sock[2];
-	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR);
+	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR|O_NONBLOCK);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
 
 	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {

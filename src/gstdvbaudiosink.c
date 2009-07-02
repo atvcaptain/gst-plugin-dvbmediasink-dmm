@@ -426,14 +426,13 @@ gst_dvbaudiosink_get_provide_clock (GstDVBAudioSink * sink)
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
-
 	SEND_COMMAND (self, CONTROL_STOP);
-
 	return TRUE;
 }
 
 static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
 {
+#if 0
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	while (TRUE)
 	{
@@ -448,6 +447,7 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
 		break;
 		}
 	}
+#endif
 	return TRUE;
 }
 
@@ -691,10 +691,10 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
-		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_FLUSH_STOP:
-		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_EOS:
 	{
@@ -751,20 +751,17 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		int skip = 0, repeat = 0, ret;
 		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
 		GST_LOG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
-		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 
+		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 		if (fmt == GST_FORMAT_TIME)
 		{
 			if ( rate > 1 )
 				skip = (int) rate;
 			else if ( rate < 1 )
 				repeat = 1.0/rate;
-
 			ret = ioctl(video_fd, VIDEO_SLOWMOTION, repeat);
 			ret = ioctl(video_fd, VIDEO_FAST_FORWARD, skip);
-
 //			gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
-
 		}
 		close(video_fd);
 		break;
@@ -776,6 +773,65 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	return TRUE;
 }
 
+#define ASYNC_WRITE(data, len) do { \
+		switch(AsyncWrite(sink, self, data, len)) { \
+		case -1: goto poll_error; \
+		case -2: goto stopped; \
+		case -3: goto write_error; \
+		default: break; \
+		} \
+	} while(0)
+
+static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *data, unsigned int len)
+{
+	unsigned int written=0;
+	struct pollfd pfd[2];
+
+	pfd[0].fd = READ_SOCKET(self);
+	pfd[0].events = POLLIN;
+	pfd[1].fd = self->fd;
+	pfd[1].events = POLLOUT;
+
+	do {
+		GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len);
+		if (poll(pfd, 2, -1) == -1) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (pfd[0].revents & POLLIN) {
+			/* read all stop commands */
+			while (TRUE) {
+				gchar command;
+				int res;
+				READ_COMMAND (self, command, res);
+				if (res < 0) {
+					GST_LOG_OBJECT (self, "no more commands");
+					/* no more commands */
+					break;
+				}
+			}
+			return -2;
+		}
+		if (pfd[1].revents & POLLOUT) {
+			int wr = write(self->fd, data+written, len - written);
+			if (wr < 0) {
+				switch (errno) {
+					case EINTR:
+					case EAGAIN:
+						break;
+					default:
+						return -3;
+				}
+			}
+			written += wr;
+		}
+	} while (written != len);
+
+	return 0;
+}
+
+
 static GstFlowReturn
 gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
@@ -786,7 +842,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char *data = GST_BUFFER_DATA (buffer) + skip;
 	gint retval;
 	size_t pes_header_size;
-	struct pollfd pfd[2];
 
 //	int i=0;
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
@@ -798,35 +853,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	{
 		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
 		return GST_FLOW_ERROR;
-	}
-
-	pfd[0].fd = READ_SOCKET(self);
-	pfd[0].events = POLLIN;
-	pfd[1].fd = self->fd;
-	pfd[1].events = POLLOUT;
-
-	do {
-		GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", size);
-		retval = poll(pfd, 2, -1);
-	} while ((retval == -1 && errno == EINTR));
-
-	if (retval == -1)
-		goto poll_error;
-
-	if (pfd[0].revents & POLLIN) {
-		/* read all stop commands */
-		while (TRUE) {
-			gchar command;
-			int res;
-
-			READ_COMMAND (self, command, res);
-			if (res < 0) {
-				GST_LOG_OBJECT (self, "no more commands");
-				/* no more commands */
-				break;
-			}
-		}
-		goto stopped;
 	}
 
 	if (self->fd < 0)
@@ -900,8 +926,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_size += 7;
 	}
 
-	write(self->fd, pes_header, pes_header_size);
-	write(self->fd, data, GST_BUFFER_SIZE (buffer) - skip);
+	ASYNC_WRITE(pes_header, pes_header_size);
+	ASYNC_WRITE(data, GST_BUFFER_SIZE (buffer) - skip);
 
 	gst_buffer_ref(buffer);
 
@@ -918,11 +944,18 @@ poll_error:
 		GST_WARNING_OBJECT (self, "Error during poll");
 		return GST_FLOW_ERROR;
 	}
+write_error:
+	{
+		GST_ELEMENT_ERROR (self, RESOURCE, READ, (NULL),
+				("write on file descriptor: %s.", g_strerror (errno)));
+		GST_WARNING_OBJECT (self, "Error during write");
+		return GST_FLOW_ERROR;
+	}
 stopped:
 	{
 		GST_WARNING_OBJECT (self, "Select stopped");
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
-		return GST_FLOW_WRONG_STATE;
+		return GST_FLOW_OK;
 	}
 }
 
@@ -931,7 +964,7 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	gint control_sock[2];
-	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR);
+	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
 
 	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {
@@ -967,10 +1000,11 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	if (self->fd >= 0)
 	{
+		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
+
 		ioctl(self->fd, AUDIO_STOP);
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_DEMUX);
 
-		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 		if ( video_fd > 0 )
 		{
 			ioctl(video_fd, VIDEO_SLOWMOTION, 0);
