@@ -171,6 +171,7 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
 static GstClock * gst_dvbaudiosink_provide_clock (GstElement * elem);
 static GstClockTime  gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink);
 static void gst_dvbaudiosink_dispose (GObject * object);
+static GstStateChangeReturn gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition);
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -214,6 +215,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 
 	gelement_class->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
 	gelement_class->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
+	gelement_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_change_state);
 
 	g_object_class_install_property (gobject_class, ARG_SILENT, g_param_spec_boolean
 		("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
@@ -427,11 +429,13 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	SEND_COMMAND (self, CONTROL_STOP);
+	GST_LOG_OBJECT (basesink, "unlock");
 	return TRUE;
 }
 
 static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
 {
+	GST_LOG_OBJECT (sink, "unlock_stop");
 #if 0
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	while (TRUE)
@@ -694,7 +698,6 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_FLUSH_STOP:
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_EOS:
 	{
@@ -840,7 +843,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	int skip = self->skip;
 	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
 	unsigned char *data = GST_BUFFER_DATA (buffer) + skip;
-	gint retval;
 	size_t pes_header_size;
 
 //	int i=0;
@@ -1018,6 +1020,51 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 		gst_buffer_unref(self->prev_data);
 
 	return TRUE;
+}
+
+static GstStateChangeReturn
+gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
+{
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
+      break;
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
+      break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
+      break;
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_NULL");
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+
+  /* ERROR */
+error:
+  GST_ELEMENT_ERROR (element, CORE, STATE_CHANGE, (NULL),
+      ("Erroring out on state change as requested"));
+  return GST_STATE_CHANGE_FAILURE;
 }
 
 /* entry point to initialize the plug-in

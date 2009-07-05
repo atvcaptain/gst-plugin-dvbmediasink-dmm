@@ -227,7 +227,7 @@ static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
 static void gst_dvbvideosink_dispose (GObject * object);
-
+static GstStateChangeReturn gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition);
 
 static void
 gst_dvbvideosink_base_init (gpointer klass)
@@ -270,6 +270,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->preroll = GST_DEBUG_FUNCPTR (gst_dvbvideosink_preroll);
 
 	element_class->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
+	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
 
 	g_object_class_install_property (gobject_class, ARG_SILENT,
 		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
@@ -414,14 +415,14 @@ query_default:
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
-
 	SEND_COMMAND (self, CONTROL_STOP);
-
+	GST_LOG_OBJECT (basesink, "unlock");
 	return TRUE;
 }
 
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * sink)
 {
+	GST_LOG_OBJECT (sink, "unlock_stop");
 #if 0
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
 	while (TRUE)
@@ -452,7 +453,6 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_FLUSH_STOP:
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_NEWSEGMENT:{
 		GstFormat fmt;
@@ -1511,7 +1511,7 @@ gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
 			"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
 			"width", G_TYPE_INT, width,
 			"height", G_TYPE_INT, height, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
+ 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
 		gst_element_post_message (GST_ELEMENT (basesink), msg);
 		s = gst_structure_new ("eventFrameRateAvail",
 			"frame_rate", G_TYPE_INT, framerate, NULL);
@@ -1524,6 +1524,51 @@ gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
 	}
 
 	return res;
+}
+
+static GstStateChangeReturn
+gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
+{
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstDVBVideoSink *self = GST_DVBVIDEOSINK (element);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
+      break;
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
+      break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
+      break;
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_NULL");
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+
+  /* ERROR */
+error:
+  GST_ELEMENT_ERROR (element, CORE, STATE_CHANGE, (NULL),
+      ("Erroring out on state change as requested"));
+  return GST_STATE_CHANGE_FAILURE;
 }
 
 /* entry point to initialize the plug-in
