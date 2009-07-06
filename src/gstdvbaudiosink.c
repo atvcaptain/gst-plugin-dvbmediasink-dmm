@@ -75,13 +75,13 @@
 
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Poll is used to determine when the fd is ready for use. When the element state is changed,
- * it happens from another thread while fdsink is select'ing on the fd. The state-change thread 
+ * it happens from another thread while fdsink is poll'ing on the fd. The state-change thread 
  * sends a control message, so fdsink wakes up and changes state immediately otherwise
  * it would stay blocked until it receives some data. */
 
 /* the poll call is also performed on the control sockets, that way
- * we can send special commands to unblock the select call */
-#define CONTROL_STOP		'S'			/* stop the select call */
+ * we can send special commands to unblock the poll call */
+#define CONTROL_STOP		'S'			/* stop the poll call */
 #define CONTROL_SOCKETS(sink)	sink->control_sock
 #define WRITE_SOCKET(sink)	sink->control_sock[1]
 #define READ_SOCKET(sink)	sink->control_sock[0]
@@ -429,13 +429,13 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	SEND_COMMAND (self, CONTROL_STOP);
-	GST_LOG_OBJECT (basesink, "unlock");
+	GST_DEBUG_OBJECT (basesink, "unlock");
 	return TRUE;
 }
 
 static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
 {
-	GST_LOG_OBJECT (sink, "unlock_stop");
+	GST_DEBUG_OBJECT (sink, "unlock_stop");
 #if 0
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	while (TRUE)
@@ -753,7 +753,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		gint64 cur, stop, time;
 		int skip = 0, repeat = 0, ret;
 		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
-		GST_LOG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
+		GST_DEBUG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
 
 		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 		if (fmt == GST_FORMAT_TIME)
@@ -809,7 +809,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 				int res;
 				READ_COMMAND (self, command, res);
 				if (res < 0) {
-					GST_LOG_OBJECT (self, "no more commands");
+					GST_DEBUG_OBJECT (self, "no more commands");
 					/* no more commands */
 					break;
 				}
@@ -955,8 +955,8 @@ write_error:
 	}
 stopped:
 	{
-		GST_WARNING_OBJECT (self, "Select stopped");
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+		GST_DEBUG_OBJECT (self, "poll stopped");
 		return GST_FLOW_OK;
 	}
 }
@@ -1025,46 +1025,43 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 static GstStateChangeReturn
 gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 {
-  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-  GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
+	GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
 
-  switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
-      break;
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
-      break;
-    default:
-      break;
-  }
+	switch (transition) {
+	case GST_STATE_CHANGE_NULL_TO_READY:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
+		break;
+	case GST_STATE_CHANGE_READY_TO_PAUSED:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+		break;
+	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
+		break;
+	default:
+		break;
+	}
 
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+	ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
-  switch (transition) {
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
-      break;
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      GST_LOG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_NULL");
-      break;
-    default:
-      break;
-  }
+	switch (transition) {
+	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
+		SEND_COMMAND (self, CONTROL_STOP);
+		break;
+	case GST_STATE_CHANGE_PAUSED_TO_READY:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
+		SEND_COMMAND (self, CONTROL_STOP);
+		break;
+	case GST_STATE_CHANGE_READY_TO_NULL:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_NULL");
+		SEND_COMMAND (self, CONTROL_STOP);
+		break;
+	default:
+		break;
+	}
 
-  return ret;
-
-  /* ERROR */
-error:
-  GST_ELEMENT_ERROR (element, CORE, STATE_CHANGE, (NULL),
-      ("Erroring out on state change as requested"));
-  return GST_STATE_CHANGE_FAILURE;
+	return ret;
 }
 
 /* entry point to initialize the plug-in
