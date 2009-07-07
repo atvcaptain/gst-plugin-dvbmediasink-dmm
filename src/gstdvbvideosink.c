@@ -562,7 +562,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *
 				switch (errno) {
 					case EINTR:
 					case EAGAIN:
-						break;
+						continue;
 					default:
 						return -3;
 				}

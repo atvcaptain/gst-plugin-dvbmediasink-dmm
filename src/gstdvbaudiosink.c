@@ -824,7 +824,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 				switch (errno) {
 					case EINTR:
 					case EAGAIN:
-						break;
+						continue;
 					default:
 						return -3;
 				}
