@@ -273,6 +273,8 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 		gst_object_unref (self->provided_clock);
 	self->provided_clock = NULL;
 
+	GST_DEBUG_OBJECT (self, "dispose");
+
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
 	READ_SOCKET (self) = -1;
@@ -966,6 +968,9 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	gint control_sock[2];
+
+	GST_DEBUG_OBJECT (self, "start");
+
 	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
 
@@ -1000,6 +1005,9 @@ static gboolean
 gst_dvbaudiosink_stop (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+
+	GST_DEBUG_OBJECT (self, "stop");
+
 	if (self->fd >= 0)
 	{
 		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);

@@ -1411,6 +1411,9 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	gint control_sock[2];
+
+	GST_DEBUG_OBJECT (self, "start");
+
 	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR|O_NONBLOCK);
 //	self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
 
@@ -1443,6 +1446,7 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "w");
+	GST_DEBUG_OBJECT (self, "stop");
 	if (self->fd >= 0)
 	{
 		if (self->dec_running) {
@@ -1481,8 +1485,9 @@ static GstFlowReturn
 gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
 {
 	GstFlowReturn res = GST_FLOW_OK;
-	GstDVBVideoSink *sink;
-	sink = GST_DVBVIDEOSINK (basesink);
+	GstDVBVideoSink *sink = GST_DVBVIDEOSINK (basesink);
+
+	GST_DEBUG_OBJECT (sink, "preroll");
 
 	if (sink->fd >= 0)
 	{
