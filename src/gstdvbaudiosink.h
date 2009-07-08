@@ -80,7 +80,6 @@ struct _GstDVBAudioSink
 
 	gint control_sock[2];
 
-	gboolean silent;
 	gboolean is_dts;
 	int fd;
 	int skip;
@@ -90,11 +89,10 @@ struct _GstDVBAudioSink
 	unsigned long long pts_eos;
 
 	/* clock */
-	gboolean       provide_clock;
 	GstClock      *provided_clock;
-	
-	/*< private >*/
-	GstDVBAudioSinkPrivate *priv;
+
+	hardwaretype_t model;
+	gboolean bypass_set;
 };
 
 struct _GstDVBAudioSinkClass 

@@ -75,16 +75,6 @@
 #define VIDEO_GET_PTS              _IOR('o', 57, gint64)
 #endif
 
-#define GST_DVBVIDEOSINK_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_DVBVIDEOSINK, GstDVBVideoSinkPrivate))
-
-struct _GstDVBVideoSinkPrivate
-{
-
-	hardwaretype_t model;
-
-};
-
 #ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 struct bitstream
 {
@@ -169,17 +159,6 @@ G_STMT_START {						\
 GST_DEBUG_CATEGORY_STATIC (dvbvideosink_debug);
 #define GST_CAT_DEFAULT dvbvideosink_debug
 
-/* Filter signals and args */
-enum {
-	/* FILL ME */
-	LAST_SIGNAL
-};
-
-enum {
-	ARG_0,
-	ARG_SILENT
-};
-
 #define COMMON_VIDEO_CAPS \
   "width = (int) [ 16, 4096 ], " \
   "height = (int) [ 16, 4096 ], " \
@@ -215,8 +194,6 @@ GST_STATIC_PAD_TEMPLATE (
 GST_BOILERPLATE_FULL (GstDVBVideoSink, gst_dvbvideosink, GstBaseSink,
 	GST_TYPE_BASE_SINK, DEBUG_INIT);
 
-static void	gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
-static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
 static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
@@ -251,10 +228,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 	GstBaseSinkClass *gstbasesink_class = GST_BASE_SINK_CLASS (klass);
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
-	g_type_class_add_private (klass, sizeof (GstDVBVideoSinkPrivate));
 
-	gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_property);
-	gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_property);
 	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbvideosink_dispose);
 
 	gstbasesink_class->get_times = NULL;
@@ -268,9 +242,6 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 
 	element_class->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
-
-	g_object_class_install_property (gobject_class, ARG_SILENT,
-		g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
 }
 
 #define H264_BUFFER_SIZE (64*1024+2048)
@@ -283,10 +254,8 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 static void
 gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 {
-	klass->priv = GST_DVBVIDEOSINK_GET_PRIVATE (klass);
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "r");
 	klass->dec_running = FALSE;
-	klass->silent = FALSE;
 	klass->must_send_header = TRUE;
 	klass->h264_buffer = NULL;
 	klass->h264_nal_len_size = 0;
@@ -303,7 +272,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 		fclose(f);
 	}
 
-	klass->priv->model = DMLEGACY;
+	klass->model = DMLEGACY;
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
 	{
@@ -312,16 +281,16 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 		if ( rd >= 5 )
 		{
 			if ( !strncasecmp(string, "DM7025", 6) )
-				klass->priv->model = DM7025;
+				klass->model = DM7025;
 			else if ( !strncasecmp(string, "DM8000", 6) )
-				klass->priv->model = DM8000;
+				klass->model = DM8000;
 			else if ( !strncasecmp(string, "DM800", 5) )
-				klass->priv->model = DM800;
+				klass->model = DM800;
 			else if ( !strncasecmp(string, "DM500HD", 7) )
-				klass->priv->model = DM500HD;
+				klass->model = DM500HD;
 		}
 		close(fd);
-		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
+		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
 	}
 
 	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
@@ -340,43 +309,6 @@ static void gst_dvbvideosink_dispose (GObject * object)
 	WRITE_SOCKET (self) = -1;
 
 	G_OBJECT_CLASS (parent_class)->dispose (object);
-}
-
-static void
-gst_dvbvideosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
-{
-	GstDVBVideoSink *sink;
-
-	g_return_if_fail (GST_IS_DVBVIDEOSINK (object));
-	sink = GST_DVBVIDEOSINK (object);
-
-	switch (prop_id)
-	{
-	case ARG_SILENT:
-		sink->silent = g_value_get_boolean (value);
-		break;
-	default:
-		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-		break;
-	}
-}
-
-static void
-gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
-{
-	GstDVBVideoSink *sink;
-
-	g_return_if_fail (GST_IS_DVBVIDEOSINK (object));
-	sink = GST_DVBVIDEOSINK (object);
-
-	switch (prop_id) {
-	case ARG_SILENT:
-		g_value_set_boolean (value, sink->silent);
-		break;
-	default:
-		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-		break;
-	}
 }
 
 static gboolean
@@ -1038,7 +970,7 @@ write_error:
 	}
 stopped:
 	{
-		GST_DEBUG_OBJECT (self, "poll flush");
+		GST_DEBUG_OBJECT (self, "poll stopped");
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		self->must_send_header = TRUE;
 		return GST_FLOW_OK;
@@ -1077,34 +1009,34 @@ static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * basesink)
 			gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
 			gst_caps_append_structure (caps, mp2_struct);
 
-			if ( self->priv->model > DM800 )
+			if ( self->model > DM800 )
 			{
 				GstStructure *mp4_struct = gst_structure_copy (s);
 				gst_structure_set (mp4_struct, "mpegversion", G_TYPE_INT, 4, NULL);
 				gst_caps_append_structure (caps, mp4_struct);
 			}
 		}
-		if ( gst_structure_has_name (s, "video/x-h264" ) && ( self->priv->model >= DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-h264" ) && ( self->model >= DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
-		if ( gst_structure_has_name (s, "video/x-h263" ) && ( self->priv->model > DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-h263" ) && ( self->model > DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
-		if ( gst_structure_has_name (s, "video/x-msmpeg" ) && ( self->priv->model > DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-msmpeg" ) && ( self->model > DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
-		if ( gst_structure_has_name (s, "video/x-divx" ) && ( self->priv->model > DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-divx" ) && ( self->model > DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
-		if ( gst_structure_has_name (s, "video/x-xvid" ) && ( self->priv->model > DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-xvid" ) && ( self->model > DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}
-		if ( gst_structure_has_name (s, "video/x-3ivx" ) && ( self->priv->model > DM800 ) )
+		if ( gst_structure_has_name (s, "video/x-3ivx" ) && ( self->model > DM800 ) )
 		{
 			gst_caps_append_structure (caps, gst_structure_copy (s));
 		}

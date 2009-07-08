@@ -98,8 +98,7 @@ struct _GstDVBVideoSink
 	int fd;
 	gboolean dec_running;
 
-	/*< private >*/
-	GstDVBVideoSinkPrivate *priv;
+	hardwaretype_t model;
 
 };
 

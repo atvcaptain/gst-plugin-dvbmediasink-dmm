@@ -104,28 +104,6 @@ G_STMT_START {						\
 GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
 #define GST_CAT_DEFAULT dvbaudiosink_debug
 
-#define GST_DVBAUDIOSINK_GET_PRIVATE(obj)  \
-   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_DVBAUDIOSINK, GstDVBAudioSinkPrivate))
-
-struct _GstDVBAudioSinkPrivate
-{
-
-	gboolean bypass_set;
-	hardwaretype_t model;
-
-};
-
-/* Filter signals and args */
-enum {
-	/* FILL ME */
-	LAST_SIGNAL
-};
-
-enum {
-	ARG_0,
-	ARG_SILENT
-};
-
 guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
 
 static GstStaticPadTemplate sink_factory =
@@ -140,25 +118,11 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-private1-dts" )
 );
 
-enum
-{
-  PROP_0,
-  PROP_BUFFER_TIME,
-  PROP_LATENCY_TIME,
-  PROP_PROVIDE_CLOCK,
-  PROP_SLAVE_METHOD
-};
-
-#define DEFAULT_PROVIDE_CLOCK   TRUE
-#define DEFAULT_SLAVE_METHOD    GST_BASE_AUDIO_SINK_SLAVE_SKEW
-
 #define DEBUG_INIT(bla) \
 	GST_DEBUG_CATEGORY_INIT (dvbaudiosink_debug, "dvbaudiosink", 0, "dvbaudiosink element");
 
 GST_BOILERPLATE_FULL (GstDVBAudioSink, gst_dvbaudiosink, GstBaseSink, GST_TYPE_BASE_SINK, DEBUG_INIT);
 
-static void	gst_dvbaudiosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
-static void	gst_dvbaudiosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
 static gboolean gst_dvbaudiosink_start (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
@@ -196,10 +160,6 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	GstBaseSinkClass *gstbasesink_class = GST_BASE_SINK_CLASS (klass);
 	GstElementClass *gelement_class = GST_ELEMENT_CLASS (klass);
 
-	g_type_class_add_private (klass, sizeof (GstDVBAudioSinkPrivate));
-
-	gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_property);
-	gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_property);
 	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
 
 	gstbasesink_class->get_times = NULL;
@@ -214,11 +174,6 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gelement_class->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
 	gelement_class->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 	gelement_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_change_state);
-
-	g_object_class_install_property (gobject_class, ARG_SILENT, g_param_spec_boolean
-		("silent", "Silent", "Produce verbose output ?", FALSE, G_PARAM_READWRITE));
-	g_object_class_install_property (gobject_class, PROP_PROVIDE_CLOCK, g_param_spec_boolean
-		("provide-clock", "Provide Clock", "Provide a clock to be used as the global pipeline clock", DEFAULT_PROVIDE_CLOCK, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 /* initialize the new element
@@ -229,10 +184,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 static void
 gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
-	klass->priv = GST_DVBAUDIOSINK_GET_PRIVATE (klass);
-	klass->priv->bypass_set = FALSE;
-	klass->provide_clock = DEFAULT_PROVIDE_CLOCK;
-	klass->silent = FALSE;
+	klass->bypass_set = FALSE;
 	klass->aac_adts_header_valid = FALSE;
 
 	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
@@ -240,7 +192,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 
 	klass->provided_clock = gst_audio_clock_new ("GstDVBAudioSinkClock", (GstAudioClockGetTimeFunc) gst_dvbaudiosink_get_time, klass);
 
-	klass->priv->model = DMLEGACY;
+	klass->model = DMLEGACY;
+
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
 	{
@@ -249,16 +202,16 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 		if ( rd >= 5 )
 		{
 			if ( !strncasecmp(string, "DM7025", 6) )
-				klass->priv->model = DM7025;
+				klass->model = DM7025;
 			else if ( !strncasecmp(string, "DM8000", 6) )
-				klass->priv->model = DM8000;
+				klass->model = DM8000;
 			else if ( !strncasecmp(string, "DM800", 5) )
-				klass->priv->model = DM800;
+				klass->model = DM800;
 			else if ( !strncasecmp(string, "DM500HD", 7) )
-				klass->priv->model = DM500HD;
-		}
+				klass->model = DM500HD;
+		}		
 		close(fd);
-		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
+		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
 	}
 }
 
@@ -289,64 +242,10 @@ gst_dvbaudiosink_provide_clock (GstElement * element)
   GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
 
   GST_OBJECT_LOCK (self);
-  if (!self->provide_clock)
-    goto clock_disabled;
-
   clock = GST_CLOCK_CAST (gst_object_ref (self->provided_clock));
   GST_OBJECT_UNLOCK (self);
 
   return clock;
-
-  /* ERRORS */
-clock_disabled:
-  {
-    GST_DEBUG_OBJECT (self, "clock provide disabled");
-    GST_OBJECT_UNLOCK (self);
-    return NULL;
-  }
-}
-
-static void
-gst_dvbaudiosink_set_property (GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
-{
-	GstDVBAudioSink *self;
-
-	g_return_if_fail (GST_IS_DVBAUDIOSINK (object));
-	self = GST_DVBAUDIOSINK (object);
-
-	switch (prop_id)
-	{
-	case ARG_SILENT:
-		self->silent = g_value_get_boolean (value);
-		break;
-	case PROP_PROVIDE_CLOCK:
-		gst_dvbaudiosink_set_provide_clock (self, g_value_get_boolean (value));
-		break;
-	default:
-		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-		break;
-	}
-}
-
-static void
-gst_dvbaudiosink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
-{
-	GstDVBAudioSink *self;
-
-	g_return_if_fail (GST_IS_DVBAUDIOSINK (object));
-	self = GST_DVBAUDIOSINK (object);
-
-	switch (prop_id) {
-	case ARG_SILENT:
-		g_value_set_boolean (value, self->silent);
-		break;
-	case PROP_PROVIDE_CLOCK:
-		g_value_set_boolean (value, gst_dvbaudiosink_get_provide_clock (self));
-		break;
-	default:
-		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-		break;
-	}
 }
 
 static gboolean
@@ -374,11 +273,12 @@ gst_dvbaudiosink_query (GstElement * element, GstQuery * query)
 		else
 			cur = last_pos;
 
-		res = cur *11111;
+		res = cur * 11111;
 
 		gst_query_set_position (query, format, res);
 
 		GST_LOG_OBJECT (self, "GST_QUERY_POSITION pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (res));
+
 		return TRUE;
 	}
 	default:
@@ -391,39 +291,22 @@ static GstClockTime
 gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink)
 {
 	GstClockTime result;
-	
 	gint64 cur = 0;
+	static gint64 last_pos = 0;
+
 	ioctl(sink->fd, AUDIO_GET_PTS, &cur);
+
+	/* workaround until driver fixed */
+	if (cur)
+		last_pos = cur;
+	else
+		cur = last_pos;
 
 	result = cur * 11111;
 
 	GST_LOG_OBJECT (sink, "get_time pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (result));
 
 	return result;
-}
-
-void
-gst_dvbaudiosink_set_provide_clock (GstDVBAudioSink * sink, gboolean provide)
-{
-  g_return_if_fail (GST_IS_DVBAUDIOSINK (sink));
-
-  GST_OBJECT_LOCK (sink);
-  sink->provide_clock = provide;
-  GST_OBJECT_UNLOCK (sink);
-}
-
-gboolean
-gst_dvbaudiosink_get_provide_clock (GstDVBAudioSink * sink)
-{
-  gboolean result;
-
-  g_return_val_if_fail (GST_IS_DVBAUDIOSINK (sink), FALSE);
-
-  GST_OBJECT_LOCK (sink);
-  result = sink->provide_clock;
-  GST_OBJECT_UNLOCK (sink);
-
-  return result;
 }
 
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
@@ -465,7 +348,7 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
 			gst_structure_set (mp1_struct, "rate", GST_TYPE_INT_RANGE, 0, 48000, NULL);
 			gst_caps_append_structure (caps, mp1_struct);
 
-			if ( self->priv->model >= DM800 )
+			if ( self->model >= DM800 )
 			{
 				GstStructure *mp3_struct = gst_structure_copy (s);
 				gst_structure_set (mp3_struct, "mpegversion", G_TYPE_INT, 1, NULL);
@@ -515,7 +398,7 @@ static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
 			GstStructure *ac3_struct = gst_structure_copy (s);
 			gst_caps_append_structure (caps, ac3_struct);
 		}
-		if ( ( self->priv->model == DM8000 ) && ( gst_structure_has_name (s, "audio/x-dts" ) || gst_structure_has_name (s, "audio/x-private1-dts") ) )
+		if ( ( self->model == DM8000 ) && ( gst_structure_has_name (s, "audio/x-dts" ) || gst_structure_has_name (s, "audio/x-private1-dts") ) )
 		{
 			GstStructure *dts_struct = gst_structure_copy (s);
 			gst_caps_append_structure (caps, dts_struct);
@@ -662,7 +545,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
 // 		return FALSE;
 	}
-	self->priv->bypass_set = TRUE;
+	self->bypass_set = TRUE;
 	return TRUE;
 }
 
@@ -830,7 +713,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //	printf("%d bytes\n", size);
 //	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
-	if ( !self->priv->bypass_set )
+	if ( !self->bypass_set )
 	{
 		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
 		return GST_FLOW_ERROR;
