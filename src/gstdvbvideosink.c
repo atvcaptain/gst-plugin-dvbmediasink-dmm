@@ -220,13 +220,11 @@ static void	gst_dvbvideosink_get_property (GObject *object, guint prop_id, GValu
 static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
-static GstFlowReturn gst_dvbvideosink_preroll (GstBaseSink * sink, GstBuffer * buffer);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer);
 static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
-static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
 static void gst_dvbvideosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition);
 
@@ -265,10 +263,8 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbvideosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbvideosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
-	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
-	gstbasesink_class->preroll = GST_DEBUG_FUNCPTR (gst_dvbvideosink_preroll);
 
 	element_class->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
@@ -328,7 +324,8 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->priv->model);
 	}
 
-	GST_BASE_SINK (klass)->sync = TRUE;
+	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
+	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), FALSE);
 }
 
 static void gst_dvbvideosink_dispose (GObject * object)
@@ -418,28 +415,6 @@ static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock");
-	return TRUE;
-}
-
-static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * sink)
-{
-	GST_DEBUG_OBJECT (sink, "unlock_stop");
-#if 0
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (sink);
-	while (TRUE)
-	{
-		gchar command;
-		int res;
-		
-		READ_COMMAND (self, command, res);
-		if (res < 0)
-		{
-		GST_DEBUG_OBJECT (self, "no more commands");
-		/* no more commands */
-		break;
-		}
-	}
-#endif
 	return TRUE;
 }
 
@@ -1481,51 +1456,6 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	return TRUE;
 }
 
-static GstFlowReturn
-gst_dvbvideosink_preroll (GstBaseSink * basesink, GstBuffer * buffer)
-{
-	GstFlowReturn res = GST_FLOW_OK;
-	GstDVBVideoSink *sink = GST_DVBVIDEOSINK (basesink);
-
-	GST_DEBUG_OBJECT (sink, "preroll");
-
-	if (sink->fd >= 0)
-	{
-		GstStructure *s = 0;
-		GstMessage *msg = 0;
-		int aspect = -1, width = -1, height = -1, framerate = -1,
-			progressive = readMpegProc("progressive", 0);
-
-		if (readApiSize(sink->fd, &width, &height, &aspect) == -1)
-		{
-			aspect = readMpegProc("aspect", 0);
-			width = readMpegProc("xres", 0);
-			height = readMpegProc("yres", 0);
-		}
-		else
-			aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
-		if (readApiFrameRate(sink->fd, &framerate) == -1)
-			framerate = readMpegProc("framerate", 0);
-
-		s = gst_structure_new ("eventSizeAvail",
-			"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
-			"width", G_TYPE_INT, width,
-			"height", G_TYPE_INT, height, NULL);
- 		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-		s = gst_structure_new ("eventFrameRateAvail",
-			"frame_rate", G_TYPE_INT, framerate, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-		s = gst_structure_new ("eventProgressiveAvail",
-			"progressive", G_TYPE_INT, progressive, NULL);
-		msg = gst_message_new_element (GST_OBJECT (basesink), s);
-		gst_element_post_message (GST_ELEMENT (basesink), msg);
-	}
-
-	return res;
-}
-
 static GstStateChangeReturn
 gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 {
@@ -1535,12 +1465,44 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_NULL_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
+		if (self->fd >= 0) {
+			GstStructure *s = 0;
+			GstMessage *msg = 0;
+			int aspect = -1, width = -1, height = -1, framerate = -1,
+				progressive = readMpegProc("progressive", 0);
+
+			if (readApiSize(self->fd, &width, &height, &aspect) == -1) {
+				aspect = readMpegProc("aspect", 0);
+				width = readMpegProc("xres", 0);
+				height = readMpegProc("yres", 0);
+			} else
+				aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
+			if (readApiFrameRate(self->fd, &framerate) == -1)
+				framerate = readMpegProc("framerate", 0);
+
+			s = gst_structure_new ("eventSizeAvail",
+				"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
+				"width", G_TYPE_INT, width,
+				"height", G_TYPE_INT, height, NULL);
+			msg = gst_message_new_element (GST_OBJECT (element), s);
+			gst_element_post_message (GST_ELEMENT (element), msg);
+			s = gst_structure_new ("eventFrameRateAvail",
+				"frame_rate", G_TYPE_INT, framerate, NULL);
+			msg = gst_message_new_element (GST_OBJECT (element), s);
+			gst_element_post_message (GST_ELEMENT (element), msg);
+			s = gst_structure_new ("eventProgressiveAvail",
+				"progressive", G_TYPE_INT, progressive, NULL);
+			msg = gst_message_new_element (GST_OBJECT (element), s);
+			gst_element_post_message (GST_ELEMENT (element), msg);
+		}
 		break;
 	case GST_STATE_CHANGE_READY_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+		ioctl(self->fd, VIDEO_FREEZE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
+		ioctl(self->fd, VIDEO_CONTINUE);
 		break;
 	default:
 		break;
@@ -1551,7 +1513,7 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
-		SEND_COMMAND (self, CONTROL_STOP);
+		ioctl(self->fd, VIDEO_FREEZE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");

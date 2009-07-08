@@ -165,7 +165,6 @@ static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer);
 static gboolean gst_dvbaudiosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
-static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
 static GstClock * gst_dvbaudiosink_provide_clock (GstElement * elem);
@@ -209,7 +208,6 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
-	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR ( gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
 
@@ -237,7 +235,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	klass->silent = FALSE;
 	klass->aac_adts_header_valid = FALSE;
 
-	GST_BASE_SINK (klass)->sync = TRUE;
+	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
+	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), FALSE);
 
 	klass->provided_clock = gst_audio_clock_new ("GstDVBAudioSinkClock", (GstAudioClockGetTimeFunc) gst_dvbaudiosink_get_time, klass);
 
@@ -432,28 +431,6 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock");
-	return TRUE;
-}
-
-static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * sink)
-{
-	GST_DEBUG_OBJECT (sink, "unlock_stop");
-#if 0
-	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
-	while (TRUE)
-	{
-		gchar command;
-		int res;
-		
-		READ_COMMAND (self, command, res);
-		if (res < 0)
-		{
-		GST_LOG_OBJECT (self, "no more commands");
-		/* no more commands */
-		break;
-		}
-	}
-#endif
 	return TRUE;
 }
 
@@ -1042,9 +1019,11 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 		break;
 	case GST_STATE_CHANGE_READY_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+		ioctl(self->fd, AUDIO_PAUSE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
+		ioctl(self->fd, AUDIO_CONTINUE);
 		break;
 	default:
 		break;
@@ -1055,7 +1034,7 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
-		SEND_COMMAND (self, CONTROL_STOP);
+		ioctl(self->fd, AUDIO_PAUSE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
