@@ -227,7 +227,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
 	}
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
-	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), FALSE);
+	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
 }
 
 static void gst_dvbaudiosink_dispose (GObject * object)
