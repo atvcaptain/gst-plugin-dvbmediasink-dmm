@@ -72,6 +72,7 @@
 #include <gst/gst.h>
 
 #include "gstdvbaudiosink.h"
+#include "gstdvbsink-marshal.h"
 
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Poll is used to determine when the fd is ready for use. When the element state is changed,
@@ -104,6 +105,14 @@ G_STMT_START {						\
 GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
 #define GST_CAT_DEFAULT dvbaudiosink_debug
 
+enum
+{
+	SIGNAL_GET_DECODER_TIME,
+	LAST_SIGNAL
+};
+
+static guint gst_dvbaudiosink_signals[LAST_SIGNAL] = { 0 };
+
 guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
 
 static GstStaticPadTemplate sink_factory =
@@ -127,14 +136,13 @@ static gboolean gst_dvbaudiosink_start (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer);
-static gboolean gst_dvbaudiosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
+static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
-static GstClock * gst_dvbaudiosink_provide_clock (GstElement * elem);
-static GstClockTime  gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink);
 static void gst_dvbaudiosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition);
+static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self);
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -162,18 +170,25 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 
 	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
 
-	gstbasesink_class->get_times = NULL;
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_start);
 	gstbasesink_class->stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_stop);
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
+	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
 
-	gelement_class->provide_clock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_provide_clock);
-	gelement_class->query = GST_DEBUG_FUNCPTR(gst_dvbaudiosink_query);
 	gelement_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_change_state);
+
+	gst_dvbaudiosink_signals[SIGNAL_GET_DECODER_TIME] =
+		g_signal_new ("get-decoder-time",
+		G_TYPE_FROM_CLASS (klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		G_STRUCT_OFFSET (GstDVBAudioSinkClass, get_decoder_time),
+		NULL, NULL, gst_dvbsink_marshal_INT64__VOID, G_TYPE_INT64, 0);
+
+	klass->get_decoder_time = gst_dvbaudiosink_get_decoder_time;
 }
 
 /* initialize the new element
@@ -185,14 +200,12 @@ static void
 gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
 	klass->bypass_set = FALSE;
+
 	klass->aac_adts_header_valid = FALSE;
 
-	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
-	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), FALSE);
-
-	klass->provided_clock = gst_audio_clock_new ("GstDVBAudioSinkClock", (GstAudioClockGetTimeFunc) gst_dvbaudiosink_get_time, klass);
-
 	klass->model = DMLEGACY;
+
+	klass->no_write = 0;
 
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
@@ -213,6 +226,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 		close(fd);
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
 	}
+	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
+	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), FALSE);
 }
 
 static void gst_dvbaudiosink_dispose (GObject * object)
@@ -221,10 +236,6 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 	
 	self = GST_DVBAUDIOSINK (object);
 	
-	if (self->provided_clock)
-		gst_object_unref (self->provided_clock);
-	self->provided_clock = NULL;
-
 	GST_DEBUG_OBJECT (self, "dispose");
 
 	close (READ_SOCKET (self));
@@ -235,66 +246,12 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
-static GstClock *
-gst_dvbaudiosink_provide_clock (GstElement * element)
+static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 {
-  GstClock *clock;
-  GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
-
-  GST_OBJECT_LOCK (self);
-  clock = GST_CLOCK_CAST (gst_object_ref (self->provided_clock));
-  GST_OBJECT_UNLOCK (self);
-
-  return clock;
-}
-
-static gboolean
-gst_dvbaudiosink_query (GstElement * element, GstQuery * query)
-{
-	GstDVBAudioSink *self = GST_DVBAUDIOSINK (element);
-
-	switch (GST_QUERY_TYPE (query)) {
-	case GST_QUERY_POSITION:
-	{
-		gint64 cur = 0, res = 0;
-		static gint64 last_pos = 0;
-		GstFormat format;
-
-		gst_query_parse_position (query, &format, NULL);
-
-		if (format != GST_FORMAT_TIME)
-			goto query_default;
-
-		ioctl(self->fd, AUDIO_GET_PTS, &cur);
-
-		/* workaround until driver fixed */
-		if (cur)
-			last_pos = cur;
-		else
-			cur = last_pos;
-
-		res = cur * 11111;
-
-		gst_query_set_position (query, format, res);
-
-		GST_LOG_OBJECT (self, "GST_QUERY_POSITION pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (res));
-
-		return TRUE;
-	}
-	default:
-query_default:
-		return GST_ELEMENT_CLASS (parent_class)->query (element, query);
-	}
-}
-
-static GstClockTime
-gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink)
-{
-	GstClockTime result;
 	gint64 cur = 0;
 	static gint64 last_pos = 0;
 
-	ioctl(sink->fd, AUDIO_GET_PTS, &cur);
+	ioctl(self->fd, AUDIO_GET_PTS, &cur);
 
 	/* workaround until driver fixed */
 	if (cur)
@@ -302,18 +259,30 @@ gst_dvbaudiosink_get_time (GstClock * clock, GstDVBAudioSink * sink)
 	else
 		cur = last_pos;
 
-	result = cur * 11111;
+	cur *= 11111;
 
-	GST_LOG_OBJECT (sink, "get_time pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (result));
-
-	return result;
+	return cur;
 }
 
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+	GST_OBJECT_LOCK(self);
+	self->no_write |= 1;
+	GST_OBJECT_UNLOCK(self);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock");
+	return TRUE;
+}
+
+static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
+{
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+	GST_OBJECT_LOCK(self);
+	self->no_write &= ~1;
+	GST_OBJECT_UNLOCK(self);
+	SEND_COMMAND (self, CONTROL_STOP);
+	GST_DEBUG_OBJECT (basesink, "unlock_stop");
 	return TRUE;
 }
 
@@ -557,9 +526,16 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 2;
+		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
-		break;
 	case GST_EVENT_FLUSH_STOP:
+		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+		GST_OBJECT_LOCK(self);
+		self->no_write &= ~2;
+		GST_OBJECT_UNLOCK(self);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_EOS:
 	{
@@ -678,7 +654,9 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 			}
 			return -2;
 		}
-		if (pfd[1].revents & POLLOUT) {
+		if (self->no_write)
+			break;
+		else if (pfd[1].revents & POLLOUT) {
 			int wr = write(self->fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {
@@ -817,7 +795,7 @@ write_error:
 	}
 stopped:
 	{
-		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
+
 		GST_DEBUG_OBJECT (self, "poll stopped");
 		return GST_FLOW_OK;
 	}

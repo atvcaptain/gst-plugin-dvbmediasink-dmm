@@ -70,6 +70,7 @@
 #include <gst/gst.h>
 
 #include "gstdvbvideosink.h"
+#include "gstdvbsink-marshal.h"
 
 #ifndef VIDEO_GET_PTS
 #define VIDEO_GET_PTS              _IOR('o', 57, gint64)
@@ -164,6 +165,14 @@ GST_DEBUG_CATEGORY_STATIC (dvbvideosink_debug);
   "height = (int) [ 16, 4096 ], " \
   "framerate = (fraction) [ 0, MAX ]"
 
+enum
+{
+	SIGNAL_GET_DECODER_TIME,
+	LAST_SIGNAL
+};
+
+static guint gst_dvb_videosink_signals[LAST_SIGNAL] = { 0 };
+
 static GstStaticPadTemplate sink_factory =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -198,12 +207,13 @@ static gboolean gst_dvbvideosink_start (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer);
-static gboolean gst_dvbvideosink_query (GstElement * element, GstQuery * query);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
 static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
+static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
 static void gst_dvbvideosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition);
+static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self);
 
 static void
 gst_dvbvideosink_base_init (gpointer klass)
@@ -231,17 +241,25 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 
 	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbvideosink_dispose);
 
-	gstbasesink_class->get_times = NULL;
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbvideosink_start);
 	gstbasesink_class->stop = GST_DEBUG_FUNCPTR (gst_dvbvideosink_stop);
 	gstbasesink_class->render = GST_DEBUG_FUNCPTR (gst_dvbvideosink_render);
 	gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_dvbvideosink_event);
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
+	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
 	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 
-	element_class->query = GST_DEBUG_FUNCPTR (gst_dvbvideosink_query);
 	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
+
+	gst_dvb_videosink_signals[SIGNAL_GET_DECODER_TIME] =
+		g_signal_new ("get-decoder-time",
+		G_TYPE_FROM_CLASS (klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+		G_STRUCT_OFFSET (GstDVBVideoSinkClass, get_decoder_time),
+		NULL, NULL, gst_dvbsink_marshal_INT64__VOID, G_TYPE_INT64, 0);
+
+	klass->get_decoder_time = gst_dvbvideosink_get_decoder_time;
 }
 
 #define H264_BUFFER_SIZE (64*1024+2048)
@@ -266,6 +284,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 	klass->num_non_keyframes = 0;
 	klass->prev_frame = NULL;
 #endif
+	klass->no_write = 0;
 
 	if (f) {
 		fgets(klass->saved_fallback_framerate, 16, f);
@@ -292,9 +311,8 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 		close(fd);
 		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
 	}
-
 	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
-	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), FALSE);
+	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), TRUE);
 }
 
 static void gst_dvbvideosink_dispose (GObject * object)
@@ -311,42 +329,43 @@ static void gst_dvbvideosink_dispose (GObject * object)
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
-static gboolean
-gst_dvbvideosink_query (GstElement * element, GstQuery * query)
+static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self)
 {
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (element);
+	gint64 cur = 0;
+	static gint64 last_pos = 0;
 
-	switch (GST_QUERY_TYPE (query)) {
-	case GST_QUERY_POSITION:
-	{
-		gint64 cur = 0, res = 0;
-		GstFormat format;
+	ioctl(self->fd, VIDEO_GET_PTS, &cur);
 
-		gst_query_parse_position (query, &format, NULL);
+	/* workaround until driver fixed */
+	if (cur)
+		last_pos = cur;
+	else
+		cur = last_pos;
 
-		if (format != GST_FORMAT_TIME)
-			goto query_default;
+	cur *= 11111;
 
-		ioctl(self->fd, VIDEO_GET_PTS, &cur);
-		
-		res = cur *11111;
-
-		gst_query_set_position (query, format, res);
-
-		GST_LOG_OBJECT (self, "GST_QUERY_POSITION pts=%lld: %" G_GUINT64_FORMAT ", time: %" GST_TIME_FORMAT, cur, GST_TIME_ARGS (res));
-		return TRUE;
-	}
-	default:
-query_default:
-		return GST_ELEMENT_CLASS (parent_class)->query (element, query);
-	}
+	return cur;
 }
 
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	GST_OBJECT_LOCK(self);
+	self->no_write |= 2;
+	GST_OBJECT_UNLOCK(self);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock");
+	return TRUE;
+}
+
+static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink)
+{
+	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	GST_OBJECT_LOCK(self);
+	self->no_write &= ~2;
+	GST_OBJECT_UNLOCK(self);
+	SEND_COMMAND (self, CONTROL_STOP);
+	GST_DEBUG_OBJECT (basesink, "unlock_stop");
 	return TRUE;
 }
 
@@ -358,9 +377,17 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 1;
+		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_FLUSH_STOP:
+		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
+		GST_OBJECT_LOCK(self);
+		self->no_write &= ~1;
+		GST_OBJECT_UNLOCK(self);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_NEWSEGMENT:{
 		GstFormat fmt;
@@ -463,7 +490,9 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *
 					g_warning ("unhandled DVBAPI Video Event %d", evt.type);
 			}
 		}
-		if (pfd[1].revents & POLLOUT) {
+		if (self->no_write)
+			break;
+		else if (pfd[1].revents & POLLOUT) {
 			int wr = write(self->fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {
@@ -501,7 +530,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", data_len);
 //	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
-
 
 	if (self->fd < 0)
 		return GST_FLOW_OK;
@@ -971,7 +999,7 @@ write_error:
 stopped:
 	{
 		GST_DEBUG_OBJECT (self, "poll stopped");
-		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
+
 		self->must_send_header = TRUE;
 		return GST_FLOW_OK;
 	}

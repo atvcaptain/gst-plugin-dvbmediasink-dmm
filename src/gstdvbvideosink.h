@@ -100,11 +100,13 @@ struct _GstDVBVideoSink
 
 	hardwaretype_t model;
 
+	int no_write;
 };
 
 struct _GstDVBVideoSinkClass 
 {
   GstBaseSinkClass parent_class;
+  gint64 (*get_decoder_time) (GstDVBVideoSink *sink);
 };
 
 GType gst_gst_dvbvideosink_get_type (void);

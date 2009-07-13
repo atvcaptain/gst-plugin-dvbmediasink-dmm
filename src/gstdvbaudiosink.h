@@ -49,8 +49,6 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
-#include <gst/audio/gstaudioclock.h>
-
 
 G_BEGIN_DECLS
 
@@ -88,21 +86,19 @@ struct _GstDVBAudioSink
 
 	unsigned long long pts_eos;
 
-	/* clock */
-	GstClock      *provided_clock;
-
 	hardwaretype_t model;
 	gboolean bypass_set;
+
+	int no_write;
 };
 
-struct _GstDVBAudioSinkClass 
+struct _GstDVBAudioSinkClass
 {
 	GstBaseSinkClass parent_class;
+	gint64 (*get_decoder_time) (GstDVBAudioSink *sink);
 };
 
 GType		gst_gst_dvbaudiosink_get_type (void);
-void		gst_dvbaudiosink_set_provide_clock (GstDVBAudioSink *sink, gboolean provide);
-gboolean	gst_dvbaudiosink_get_provide_clock (GstDVBAudioSink *sink);
 
 G_END_DECLS
 
