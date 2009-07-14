@@ -197,7 +197,7 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			else if ( !strncasecmp(string, "DM800", 5) || !strncasecmp(string, "DM500HD", 7) ) {
 				GST_INFO ("model is %s set broadcom caps", string);
 				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom_dts));
+					gst_static_pad_template_get (&sink_factory_broadcom));
 				factory_set = TRUE;
 			}
 		}
