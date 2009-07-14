@@ -68,8 +68,6 @@ typedef struct _GstDVBAudioSink		GstDVBAudioSink;
 typedef struct _GstDVBAudioSinkClass	GstDVBAudioSinkClass;
 typedef struct _GstDVBAudioSinkPrivate	GstDVBAudioSinkPrivate;
 
-typedef enum { DMLEGACY, DM7025, DM800, DM500HD, DM8000 } hardwaretype_t;
-
 struct _GstDVBAudioSink
 {
 	GstBaseSink element;
@@ -86,7 +84,6 @@ struct _GstDVBAudioSink
 
 	unsigned long long pts_eos;
 
-	hardwaretype_t model;
 	gboolean bypass_set;
 
 	int no_write;
@@ -98,7 +95,7 @@ struct _GstDVBAudioSinkClass
 	gint64 (*get_decoder_time) (GstDVBAudioSink *sink);
 };
 
-GType		gst_gst_dvbaudiosink_get_type (void);
+GType gst_gst_dvbaudiosink_get_type (void);
 
 G_END_DECLS
 

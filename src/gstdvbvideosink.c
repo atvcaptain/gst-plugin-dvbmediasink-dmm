@@ -165,6 +165,11 @@ GST_DEBUG_CATEGORY_STATIC (dvbvideosink_debug);
   "height = (int) [ 16, 4096 ], " \
   "framerate = (fraction) [ 0, MAX ]"
 
+#define MPEG4V2_LIMITED_CAPS \
+  "width = (int) [ 16, 800 ], " \
+  "height = (int) [ 16, 600 ], " \
+  "framerate = (fraction) [ 0, MAX ]"
+
 enum
 {
 	SIGNAL_GET_DECODER_TIME,
@@ -173,7 +178,31 @@ enum
 
 static guint gst_dvb_videosink_signals[LAST_SIGNAL] = { 0 };
 
-static GstStaticPadTemplate sink_factory =
+static GstStaticPadTemplate sink_factory_bcm7400 =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS (
+		"video/mpeg, "
+		"mpegversion = (int) { 1, 2, 4 }, "
+		"systemstream = (boolean) false, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h264, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h263, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-msmpeg, "
+	MPEG4V2_LIMITED_CAPS ", mspegversion = (int) 43; "
+		"video/x-divx, "
+	MPEG4V2_LIMITED_CAPS ", divxversion = (int) [ 3, 5 ]; "
+		"video/x-xvid, "
+	MPEG4V2_LIMITED_CAPS "; "
+		"video/x-3ivx, "
+	MPEG4V2_LIMITED_CAPS "; ")
+);
+
+static GstStaticPadTemplate sink_factory_bcm7405 =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
@@ -197,6 +226,35 @@ GST_STATIC_PAD_TEMPLATE (
 	COMMON_VIDEO_CAPS "; ")
 );
 
+
+static GstStaticPadTemplate sink_factory_bcm7401 =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS (
+		"video/mpeg, "
+		"mpegversion = (int) { 1, 2, 4 }, "
+		"systemstream = (boolean) false, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h264, "
+	COMMON_VIDEO_CAPS "; "
+		"video/x-h263, "
+	COMMON_VIDEO_CAPS "; ")
+);
+
+static GstStaticPadTemplate sink_factory_ati_xilleon =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS (
+		"video/mpeg, "
+		"mpegversion = (int) { 1, 2 }, "
+		"systemstream = (boolean) false, "
+	COMMON_VIDEO_CAPS "; ")
+);
+
 #define DEBUG_INIT(bla) \
 	GST_DEBUG_CATEGORY_INIT (dvbvideosink_debug, "dvbvideosink", 0, "dvbvideosink element");
 
@@ -208,7 +266,6 @@ static gboolean gst_dvbvideosink_stop (GstBaseSink * sink);
 static gboolean gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event);
 static GstFlowReturn gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer);
 static gboolean gst_dvbvideosink_set_caps (GstBaseSink * sink, GstCaps * caps);
-static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * bsink);
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbvideosink_unlock_stop (GstBaseSink * basesink);
 static void gst_dvbvideosink_dispose (GObject * object);
@@ -225,9 +282,42 @@ gst_dvbvideosink_base_init (gpointer klass)
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+	gboolean factory_set = FALSE;
 
-	gst_element_class_add_pad_template (element_class,
-		gst_static_pad_template_get (&sink_factory));
+	int fd = open("/proc/stb/info/model", O_RDONLY);
+	if ( fd > 0 )
+	{
+		gchar string[8] = { 0, };
+		ssize_t rd = read(fd, string, 7);
+		if ( rd >= 5 )
+		{
+			if ( !strncasecmp(string, "DM7025", 6) ) {
+				GST_INFO ("model is DM7025... set ati xilleon caps");
+			} else if ( !strncasecmp(string, "DM500HD", 7) ) {
+				GST_INFO ("model is DM500HD... set bcm7405 caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_bcm7405));
+				factory_set = TRUE;
+			} else if ( !strncasecmp(string, "DM8000", 6) ) {
+				GST_INFO ("model is DM8000... set bcm7400 caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_bcm7400));
+				factory_set = TRUE;
+			} else if ( !strncasecmp(string, "DM800", 5) ) {
+				GST_INFO ("model is DM800 set bcm7401 caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_bcm7401));
+				factory_set = TRUE;
+			}
+		}
+		close(fd);
+	}
+
+	if (!factory_set) {
+		gst_element_class_add_pad_template (element_class,
+			gst_static_pad_template_get (&sink_factory_ati_xilleon));
+	}
+
 	gst_element_class_set_details (element_class, &element_details);
 }
 
@@ -248,7 +338,6 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
-	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 
 	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
 
@@ -291,26 +380,6 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 		fclose(f);
 	}
 
-	klass->model = DMLEGACY;
-	int fd = open("/proc/stb/info/model", O_RDONLY);
-	if ( fd > 0 )
-	{
-		gchar string[8] = { 0, };
-		ssize_t rd = read(fd, string, 7);
-		if ( rd >= 5 )
-		{
-			if ( !strncasecmp(string, "DM7025", 6) )
-				klass->model = DM7025;
-			else if ( !strncasecmp(string, "DM8000", 6) )
-				klass->model = DM8000;
-			else if ( !strncasecmp(string, "DM800", 5) )
-				klass->model = DM800;
-			else if ( !strncasecmp(string, "DM500HD", 7) )
-				klass->model = DM500HD;
-		}
-		close(fd);
-		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
-	}
 	gst_base_sink_set_sync(GST_BASE_SINK (klass), FALSE);
 	gst_base_sink_set_async_enabled(GST_BASE_SINK (klass), TRUE);
 }
@@ -1003,78 +1072,6 @@ stopped:
 		self->must_send_header = TRUE;
 		return GST_FLOW_OK;
 	}
-}
-
-static GstCaps *gst_dvbvideosink_get_caps (GstBaseSink * basesink)
-{
-	GstElementClass *element_class;
-	GstPadTemplate *pad_template;
-	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
-	GstCaps *in_caps, *caps;
-
-	element_class = GST_ELEMENT_GET_CLASS (self);
-	pad_template = gst_element_class_get_pad_template(element_class, "sink");
-	g_return_val_if_fail (pad_template != NULL, NULL);
-	
-	in_caps = gst_caps_copy (gst_pad_template_get_caps (pad_template));
-	in_caps = gst_caps_make_writable (in_caps);
-
-	GstStructure *s;
-	gint i;
-	
-	caps = gst_caps_new_empty ();
-
-	for (i = 0; i < gst_caps_get_size (in_caps); ++i)
-	{	
-		s = gst_caps_get_structure (in_caps, i);
-		if ( gst_structure_has_name (s, "video/mpeg") )
-		{
-			GstStructure *mp1_struct = gst_structure_copy (s);
-			gst_structure_set (mp1_struct, "mpegversion", G_TYPE_INT, 1, NULL);
-			gst_caps_append_structure (caps, mp1_struct);
-
-			GstStructure *mp2_struct = gst_structure_copy (s);
-			gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
-			gst_caps_append_structure (caps, mp2_struct);
-
-			if ( self->model > DM800 )
-			{
-				GstStructure *mp4_struct = gst_structure_copy (s);
-				gst_structure_set (mp4_struct, "mpegversion", G_TYPE_INT, 4, NULL);
-				gst_caps_append_structure (caps, mp4_struct);
-			}
-		}
-		if ( gst_structure_has_name (s, "video/x-h264" ) && ( self->model >= DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-		if ( gst_structure_has_name (s, "video/x-h263" ) && ( self->model > DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-		if ( gst_structure_has_name (s, "video/x-msmpeg" ) && ( self->model > DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-		if ( gst_structure_has_name (s, "video/x-divx" ) && ( self->model > DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-		if ( gst_structure_has_name (s, "video/x-xvid" ) && ( self->model > DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-		if ( gst_structure_has_name (s, "video/x-3ivx" ) && ( self->model > DM800 ) )
-		{
-			gst_caps_append_structure (caps, gst_structure_copy (s));
-		}
-	}
-
-	GST_DEBUG_OBJECT (self, "old caps: %s\nnew caps: %s\n", gst_caps_to_string(in_caps), gst_caps_to_string(caps));
-
-	gst_caps_unref (in_caps);
-
-	return caps;
 }
 
 static gboolean 

@@ -71,7 +71,6 @@ typedef struct _GstDVBVideoSinkClass	GstDVBVideoSinkClass;
 typedef struct _GstDVBVideoSinkPrivate	GstDVBVideoSinkPrivate;
 
 typedef enum { CT_MPEG1, CT_MPEG2, CT_H264, CT_DIVX311, CT_MPEG4_PART2 } t_codec_type;
-typedef enum { DMLEGACY, DM7025, DM800, DM500HD, DM8000 } hardwaretype_t;
 
 struct _GstDVBVideoSink
 {
@@ -97,8 +96,6 @@ struct _GstDVBVideoSink
 
 	int fd;
 	gboolean dec_running;
-
-	hardwaretype_t model;
 
 	int no_write;
 };

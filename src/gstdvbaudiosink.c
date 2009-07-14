@@ -115,7 +115,19 @@ static guint gst_dvbaudiosink_signals[LAST_SIGNAL] = { 0 };
 
 guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
 
-static GstStaticPadTemplate sink_factory =
+static GstStaticPadTemplate sink_factory_ati_xilleon =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS ("audio/mpeg, "
+		"mpegversion = (int) [ 1, 2 ], "
+		"layer = (int) [ 1, 2 ]; "
+		"audio/x-ac3; "
+		"audio/x-private1-ac3")
+);
+
+static GstStaticPadTemplate sink_factory_broadcom_dts =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
@@ -124,7 +136,17 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-ac3; "
 		"audio/x-private1-ac3; "
 		"audio/x-dts; "
-		"audio/x-private1-dts" )
+		"audio/x-private1-dts")
+);
+
+static GstStaticPadTemplate sink_factory_broadcom =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS ("audio/mpeg; "
+		"audio/x-ac3; "
+		"audio/x-private1-ac3")
 );
 
 #define DEBUG_INIT(bla) \
@@ -139,7 +161,6 @@ static GstFlowReturn gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * bu
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink);
 static gboolean gst_dvbaudiosink_set_caps (GstBaseSink * sink, GstCaps * caps);
-static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * bsink);
 static void gst_dvbaudiosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition);
 static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self);
@@ -154,9 +175,40 @@ gst_dvbaudiosink_base_init (gpointer klass)
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+	gboolean factory_set = FALSE;
 
-	gst_element_class_add_pad_template (element_class,
-		gst_static_pad_template_get (&sink_factory));
+	int fd = open("/proc/stb/info/model", O_RDONLY);
+	if ( fd > 0 )
+	{
+		gchar string[8] = { 0, };
+		ssize_t rd = read(fd, string, 7);
+		if ( rd >= 5 )
+		{
+			string[rd] = 0;
+			if ( !strncasecmp(string, "DM7025", 6) ) {
+				GST_INFO ("model is DM7025 set ati xilleon caps");
+			}
+			else if ( !strncasecmp(string, "DM8000", 6) ) {
+				GST_INFO ("model is DM8000 set broadcom dts caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_broadcom_dts));
+				factory_set = TRUE;
+			}
+			else if ( !strncasecmp(string, "DM800", 5) || !strncasecmp(string, "DM500HD", 7) ) {
+				GST_INFO ("model is %s set broadcom caps", string);
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_broadcom_dts));
+				factory_set = TRUE;
+			}
+		}
+		close(fd);
+	}
+
+	if (!factory_set) {
+		gst_element_class_add_pad_template (element_class,
+			gst_static_pad_template_get (&sink_factory_ati_xilleon));
+	}
+
 	gst_element_class_set_details (element_class, &element_details);
 }
 
@@ -177,7 +229,6 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
-	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
 
 	gelement_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_change_state);
 
@@ -203,29 +254,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 
 	klass->aac_adts_header_valid = FALSE;
 
-	klass->model = DMLEGACY;
-
 	klass->no_write = 0;
 
-	int fd = open("/proc/stb/info/model", O_RDONLY);
-	if ( fd > 0 )
-	{
-		gchar string[8] = { 0, };
-		ssize_t rd = read(fd, string, 7);
-		if ( rd >= 5 )
-		{
-			if ( !strncasecmp(string, "DM7025", 6) )
-				klass->model = DM7025;
-			else if ( !strncasecmp(string, "DM8000", 6) )
-				klass->model = DM8000;
-			else if ( !strncasecmp(string, "DM800", 5) )
-				klass->model = DM800;
-			else if ( !strncasecmp(string, "DM500HD", 7) )
-				klass->model = DM500HD;
-		}		
-		close(fd);
-		GST_INFO_OBJECT (klass, "found hardware model %s (%i)",string,klass->model);
-	}
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
 }
@@ -284,101 +314,6 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock_stop");
 	return TRUE;
-}
-
-static GstCaps *gst_dvbaudiosink_get_caps (GstBaseSink * basesink)
-{
-	GstElementClass *element_class;
-	GstPadTemplate *pad_template;
-	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
-	GstCaps *in_caps, *caps;
-
-	element_class = GST_ELEMENT_GET_CLASS (self);
-	pad_template = gst_element_class_get_pad_template(element_class, "sink");
-	g_return_val_if_fail (pad_template != NULL, NULL);
-	
-	in_caps = gst_caps_copy (gst_pad_template_get_caps (pad_template));
-	in_caps = gst_caps_make_writable (in_caps);
-
-	GstStructure *s;
-	gint i;
-	
-	caps = gst_caps_new_empty ();
-
-	for (i = 0; i < gst_caps_get_size (in_caps); ++i)
-	{	
-		s = gst_caps_get_structure (in_caps, i);
-		if ( gst_structure_has_name (s, "audio/mpeg") )
-		{
-			GstStructure *mp1_struct = gst_structure_copy (s);
-
-			gst_structure_set (mp1_struct, "mpegversion", G_TYPE_INT, 1, NULL);
-			gst_structure_set (mp1_struct, "layer", GST_TYPE_INT_RANGE, 1, 2, NULL);
-			gst_structure_set (mp1_struct, "rate", GST_TYPE_INT_RANGE, 0, 48000, NULL);
-			gst_caps_append_structure (caps, mp1_struct);
-
-			if ( self->model >= DM800 )
-			{
-				GstStructure *mp3_struct = gst_structure_copy (s);
-				gst_structure_set (mp3_struct, "mpegversion", G_TYPE_INT, 1, NULL);
-				gst_structure_set (mp3_struct, "layer", G_TYPE_INT, 3, NULL);
-				GValue value = { 0 };
-				GValue rate_value = { 0 };
-				g_value_init (&rate_value, GST_TYPE_LIST);
-				g_value_init (&value, G_TYPE_INT);
-				gint rate_idx=0;
-				do {
-					int rate = AdtsSamplingRates[rate_idx];
-					++rate_idx;
-					if ( rate > 48000 )
-						continue;
-					else if ( rate < 8000 )
-						break;
-					g_value_set_int (&value, rate);
-					gst_value_list_append_value (&rate_value, &value);
-				} while (AdtsSamplingRates[rate_idx]);
-				gst_structure_set_value (mp3_struct, "rate", &rate_value);
-				g_value_unset (&value);
-				g_value_unset (&rate_value);
-				gst_caps_append_structure (caps, mp3_struct);
-	
-				GstStructure *mp2_struct = gst_structure_copy (s);
-				gst_structure_set (mp2_struct, "mpegversion", G_TYPE_INT, 2, NULL);
-				g_value_init (&rate_value, GST_TYPE_LIST);
-				g_value_init (&value, G_TYPE_INT);
-				rate_idx=0;
-				do {
-					g_value_set_int (&value, AdtsSamplingRates[rate_idx]);
-					gst_value_list_append_value (&rate_value, &value);
-					++rate_idx;
-				} while (AdtsSamplingRates[rate_idx]);
-				gst_structure_set_value (mp2_struct, "rate", &rate_value);
-				g_value_unset (&value);
-				g_value_unset (&rate_value);
-				gst_caps_append_structure (caps, mp2_struct);
-	
-				GstStructure *mp4_struct = gst_structure_copy (mp2_struct);
-				gst_structure_set (mp4_struct, "mpegversion", G_TYPE_INT, 4, NULL);
-				gst_caps_append_structure (caps, mp4_struct);
-			}
-		}
-		if ( gst_structure_has_name (s, "audio/x-ac3" ) || gst_structure_has_name (s, "audio/x-private1-ac3" ) )
-		{
-			GstStructure *ac3_struct = gst_structure_copy (s);
-			gst_caps_append_structure (caps, ac3_struct);
-		}
-		if ( ( self->model == DM8000 ) && ( gst_structure_has_name (s, "audio/x-dts" ) || gst_structure_has_name (s, "audio/x-private1-dts") ) )
-		{
-			GstStructure *dts_struct = gst_structure_copy (s);
-			gst_caps_append_structure (caps, dts_struct);
-		}
-	}
-
-	GST_DEBUG_OBJECT (self, "old caps: %s\nnew caps: %s\n", gst_caps_to_string(in_caps), gst_caps_to_string(caps));
-
-	gst_caps_unref (in_caps);
-
-	return caps;
 }
 
 static gboolean 
