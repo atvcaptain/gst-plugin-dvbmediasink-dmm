@@ -543,20 +543,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		int retval;
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
-#if 0
-			/* needs driver support */
-		pfd[1].fd = self->fd;
-		pfd[1].events = POLLHUP;
 
-		do {
-			GST_DEBUG_OBJECT (self, "going into poll to wait for EOS");
-			retval = poll(pfd, 2, -1);
-		} while ((retval == -1 && errno == EINTR));
-		
-		if (pfd[0].revents & POLLIN) /* flush */
-			break;
-		GST_DEBUG_OBJECT (self, "EOS wait ended because of buffer empty. now waiting for PTS %llx", self->pts_eos);
-#else
 		if (self->prev_data) {
 			int i=0;
 			for (; i < 3; ++i)  // write the last frame three times more to fill the buffer...
@@ -578,10 +565,12 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 			retval = poll(pfd, 1, 500);
 
 				/* check for flush */
-			if (pfd[0].revents & POLLIN)
-				break;
+			if (pfd[0].revents & POLLIN) {
+				GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
+				return FALSE;
+			}
 		} while (1);
-#endif
+
 		break;
 	}
 	case GST_EVENT_NEWSEGMENT:{
