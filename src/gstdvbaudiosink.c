@@ -165,6 +165,10 @@ static void gst_dvbaudiosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition);
 static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self);
 
+typedef enum { DM7025, DM800, DM8000, DM500HD } hardware_type_t;
+
+static hardware_type_t hwtype;
+
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
 {
@@ -175,8 +179,7 @@ gst_dvbaudiosink_base_init (gpointer klass)
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
-	gboolean factory_set = FALSE;
-
+	
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
 	{
@@ -186,25 +189,32 @@ gst_dvbaudiosink_base_init (gpointer klass)
 		{
 			string[rd] = 0;
 			if ( !strncasecmp(string, "DM7025", 6) ) {
+				hwtype = DM7025;
 				GST_INFO ("model is DM7025 set ati xilleon caps");
 			}
 			else if ( !strncasecmp(string, "DM8000", 6) ) {
+				hwtype = DM8000;
 				GST_INFO ("model is DM8000 set broadcom dts caps");
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_broadcom_dts));
-				factory_set = TRUE;
 			}
-			else if ( !strncasecmp(string, "DM800", 5) || !strncasecmp(string, "DM500HD", 7) ) {
-				GST_INFO ("model is %s set broadcom caps", string);
+			else if ( !strncasecmp(string, "DM800", 5) ) {
+				hwtype = DM800;
+				GST_INFO ("model is DM800 set broadcom caps", string);
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_broadcom));
-				factory_set = TRUE;
+			}
+			else if ( !strncasecmp(string, "DM500HD", 7) ) {
+				hwtype = DM500HD;
+				GST_INFO ("model is DM500HD set broadcom caps", string);
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_broadcom));
 			}
 		}
 		close(fd);
 	}
 
-	if (!factory_set) {
+	if (hwtype == DM7025) {
 		gst_element_class_add_pad_template (element_class,
 			gst_static_pad_template_get (&sink_factory_ati_xilleon));
 	}
@@ -651,22 +661,38 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		self->pts_eos = pts;
 
-		pes_header[4] = (size + 8) >> 8;
-		pes_header[5] = (size + 8) & 0xFF;
-		
 		pes_header[6] = 0x80;
-		pes_header[7] = 0x80;
-		
-		pes_header[8] = 5;
-		
+
 		pes_header[9]  = 0x21 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
 		pes_header[11] = 0x01 | ((pts >> 14) & 0xFE);
 		pes_header[12] = pts >> 7;
 		pes_header[13] = 0x01 | ((pts << 1) & 0xFE);
-		pes_header_size = 14;
-	} else
-	{
+
+		if (hwtype == DM7025) {  // DM7025 needs DTS in PES header
+			int64_t dts = pts; // what to use as DTS-PTS offset?
+			pes_header[4] = (size + 13) >> 8;
+			pes_header[5] = (size + 13) & 0xFF;
+			pes_header[7] = 0xC0;
+			pes_header[8] = 10;
+			pes_header[9] |= 0x10;
+
+			pes_header[14] = 0x11 | ((dts >> 29) & 0xE);
+			pes_header[15] = dts >> 22;
+			pes_header[16] = 0x01 | ((dts >> 14) & 0xFE);
+			pes_header[17] = dts >> 7;
+			pes_header[18] = 0x01 | ((dts << 1) & 0xFE);
+			pes_header_size = 19;
+		}
+		else {
+			pes_header[4] = (size + 8) >> 8;
+			pes_header[5] = (size + 8) & 0xFF;
+			pes_header[7] = 0x80;
+			pes_header[8] = 5;
+			pes_header_size = 14;
+		}
+	}
+	else {
 		pes_header[4] = (size + 3) >> 8;
 		pes_header[5] = (size + 3) & 0xFF;
 		pes_header[6] = 0x80;
@@ -751,7 +777,6 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 	{
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
 		ioctl(self->fd, AUDIO_PLAY);
-//		ioctl(self->fd, AUDIO_SET_BYPASS_MODE, 0);
 	}
 	return TRUE;
 	/* ERRORS */

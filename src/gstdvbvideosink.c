@@ -272,6 +272,10 @@ static void gst_dvbvideosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition);
 static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self);
 
+typedef enum { DM7025, DM800, DM8000, DM500HD } hardware_type_t;
+
+static hardware_type_t hwtype;
+
 static void
 gst_dvbvideosink_base_init (gpointer klass)
 {
@@ -282,7 +286,6 @@ gst_dvbvideosink_base_init (gpointer klass)
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
-	gboolean factory_set = FALSE;
 
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
@@ -292,28 +295,29 @@ gst_dvbvideosink_base_init (gpointer klass)
 		if ( rd >= 5 )
 		{
 			if ( !strncasecmp(string, "DM7025", 6) ) {
+				hwtype = DM7025;
 				GST_INFO ("model is DM7025... set ati xilleon caps");
 			} else if ( !strncasecmp(string, "DM500HD", 7) ) {
+				hwtype = DM500HD;
 				GST_INFO ("model is DM500HD... set bcm7405 caps");
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_bcm7405));
-				factory_set = TRUE;
 			} else if ( !strncasecmp(string, "DM8000", 6) ) {
+				hwtype = DM8000;
 				GST_INFO ("model is DM8000... set bcm7400 caps");
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_bcm7400));
-				factory_set = TRUE;
 			} else if ( !strncasecmp(string, "DM800", 5) ) {
+				hwtype = DM800;
 				GST_INFO ("model is DM800 set bcm7401 caps");
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_bcm7401));
-				factory_set = TRUE;
 			}
 		}
 		close(fd);
 	}
 
-	if (!factory_set) {
+	if (hwtype == DM7025) {
 		gst_element_class_add_pad_template (element_class,
 			gst_static_pad_template_get (&sink_factory_ati_xilleon));
 	}
