@@ -60,6 +60,7 @@
 #include <config.h>
 #endif
 #include <unistd.h>
+#include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <linux/dvb/video.h>

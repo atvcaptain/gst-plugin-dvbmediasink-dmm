@@ -61,6 +61,7 @@
 #include <config.h>
 #endif
 #include <unistd.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
