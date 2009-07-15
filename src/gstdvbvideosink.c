@@ -367,7 +367,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 {
 	FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "r");
 	klass->dec_running = FALSE;
-	klass->must_send_header = TRUE;
+	klass->must_send_header = 1;
 	klass->h264_buffer = NULL;
 	klass->h264_nal_len_size = 0;
 	klass->codec_data = NULL;
@@ -720,7 +720,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 						memcpy(pes_header+pes_header_len, codec_data, codec_data_len);
 						pes_header_len += codec_data_len;
 					}
-					self->must_send_header = FALSE;
+					self->must_send_header = 0;
 				}
 			}
 			if (self->codec_type == CT_H264) {  // MKV stuff
@@ -982,7 +982,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				}
 				self->codec_data = gst_buffer_new_and_alloc(sheader_data_len);
 				memcpy(GST_BUFFER_DATA(self->codec_data), data+pos-sheader_data_len, sheader_data_len);
-				self->must_send_header = FALSE;
+				self->must_send_header = 0;
 leave:
 				ok = FALSE;
 			}
@@ -1016,7 +1016,7 @@ leave:
 				ASYNC_WRITE(data, pos);
 				ASYNC_WRITE(codec_data, codec_data_len);
 				ASYNC_WRITE(data+pos, data_len - pos);
-				self->must_send_header = FALSE;
+				--self->must_send_header;
 				return GST_FLOW_OK;
 			}
 		}
@@ -1072,8 +1072,9 @@ write_error:
 stopped:
 	{
 		GST_DEBUG_OBJECT (self, "poll stopped");
-
-		self->must_send_header = TRUE;
+		self->must_send_header = 1;
+		if (hwtype == DM7025)
+			++self->must_send_header;  // we must send the sequence header twice on dm7025... 
 		return GST_FLOW_OK;
 	}
 }

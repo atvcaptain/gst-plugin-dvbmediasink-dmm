@@ -78,7 +78,8 @@ struct _GstDVBVideoSink
 
 	gint control_sock[2];
 
-	gboolean silent, must_send_header;
+	gboolean silent;
+	gint must_send_header;
 
 	GstBuffer *h264_buffer;
 	gint h264_nal_len_size;
