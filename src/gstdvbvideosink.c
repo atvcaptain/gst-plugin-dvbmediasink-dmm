@@ -463,6 +463,49 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
 		break;
+	case GST_EVENT_EOS:
+	{
+		struct pollfd pfd[2];
+		int retval;
+		gboolean last_diff_set;
+		long long last_diff = FALSE;
+
+		pfd[0].fd = READ_SOCKET(self);
+		pfd[0].events = POLLIN;
+
+		do {
+			unsigned long long cur;
+
+			ioctl(self->fd, VIDEO_GET_PTS, &cur);
+
+			long long diff = self->pts_eos - cur;
+
+			GST_DEBUG_OBJECT (self, "at %llx last_written_frame %llx (diff %lld)\n", cur, self->pts_eos, diff);
+
+			if ( diff <= 100 ) {
+				GST_DEBUG_OBJECT (self, "diff < 100.. so now EOS reached");
+				break;
+			}
+
+			if ( last_diff_set && last_diff == diff ) {
+				GST_DEBUG_OBJECT (self, "last_diff (%lld) equal to current diff.. so now EOS reached", last_diff);
+				break;
+			}
+
+			last_diff = diff;
+			last_diff_set = TRUE;
+
+			retval = poll(pfd, 1, 500);
+
+				/* check for flush */
+			if (pfd[0].revents & POLLIN) {
+				GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
+				return FALSE;
+			}
+		} while (1);
+
+		break;
+	}
 	case GST_EVENT_NEWSEGMENT:{
 		GstFormat fmt;
 		gboolean update;
@@ -696,6 +739,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		/* do we have a timestamp? */
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
+
+		self->pts_eos = pts;
 
 		pes_header[6] = 0x80;
 		pes_header[7] = 0x80;
@@ -1052,7 +1097,6 @@ leave:
 		self->prev_frame = buffer;
 	}
 #endif
-
 	ASYNC_WRITE(data, data_len);
 
 	return GST_FLOW_OK;
@@ -1477,6 +1521,7 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
 		ioctl(self->fd, VIDEO_FREEZE);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");

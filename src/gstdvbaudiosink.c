@@ -487,6 +487,9 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	{
 		struct pollfd pfd[2];
 		int retval;
+		gboolean last_diff_set;
+		long long last_diff = FALSE;
+
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
 
@@ -503,10 +506,20 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 
 			long long diff = self->pts_eos - cur;
 
-			GST_DEBUG_OBJECT (self, "at %llx last %llx (diff %lld)\n", cur, self->pts_eos, diff);
+			GST_DEBUG_OBJECT (self, "at %llx last_written_frame %llx (diff %lld)\n", cur, self->pts_eos, diff);
 
-			if ( diff <= 100 )
+			if ( diff <= 100 ) {
+				GST_DEBUG_OBJECT (self, "diff < 100.. so now EOS reached");
 				break;
+			}
+
+			if ( last_diff_set && last_diff == diff ) {
+				GST_DEBUG_OBJECT (self, "last_diff (%lld) equal to current diff.. so now EOS reached", last_diff);
+				break;
+			}
+
+			last_diff = diff;
+			last_diff_set = TRUE;
 
 			retval = poll(pfd, 1, 500);
 
@@ -846,6 +859,7 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
 		ioctl(self->fd, AUDIO_PAUSE);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");

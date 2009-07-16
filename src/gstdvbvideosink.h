@@ -99,6 +99,8 @@ struct _GstDVBVideoSink
 	gboolean dec_running;
 
 	int no_write;
+
+	unsigned long long pts_eos;
 };
 
 struct _GstDVBVideoSinkClass 
