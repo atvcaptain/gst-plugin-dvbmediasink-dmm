@@ -1472,6 +1472,9 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_NULL_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_NULL_TO_READY");
+		break;
+	case GST_STATE_CHANGE_READY_TO_PAUSED:
+		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
 		if (self->fd >= 0) {
 			GstStructure *s = 0;
 			GstMessage *msg = 0;
@@ -1502,9 +1505,6 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 			msg = gst_message_new_element (GST_OBJECT (element), s);
 			gst_element_post_message (GST_ELEMENT (element), msg);
 		}
-		break;
-	case GST_STATE_CHANGE_READY_TO_PAUSED:
-		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
 		ioctl(self->fd, VIDEO_FREEZE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
