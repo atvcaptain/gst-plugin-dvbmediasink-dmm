@@ -289,20 +289,23 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 
 static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 {
-	gint64 cur = 0;
-	static gint64 last_pos = 0;
+	if (self->bypass_set) {
+		gint64 cur = 0;
+		static gint64 last_pos = 0;
 
-	ioctl(self->fd, AUDIO_GET_PTS, &cur);
+		ioctl(self->fd, AUDIO_GET_PTS, &cur);
 
-	/* workaround until driver fixed */
-	if (cur)
-		last_pos = cur;
-	else
-		cur = last_pos;
+		/* workaround until driver fixed */
+		if (cur)
+			last_pos = cur;
+		else
+			cur = last_pos;
 
-	cur *= 11111;
+		cur *= 11111;
 
-	return cur;
+		return cur;
+	}
+	return GST_CLOCK_TIME_NONE;
 }
 
 static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)

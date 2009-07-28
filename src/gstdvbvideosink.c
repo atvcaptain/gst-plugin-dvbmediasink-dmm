@@ -405,20 +405,23 @@ static void gst_dvbvideosink_dispose (GObject * object)
 
 static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self)
 {
-	gint64 cur = 0;
-	static gint64 last_pos = 0;
+	if (self->dec_running) {
+		gint64 cur = 0;
+		static gint64 last_pos = 0;
 
-	ioctl(self->fd, VIDEO_GET_PTS, &cur);
+		ioctl(self->fd, VIDEO_GET_PTS, &cur);
 
-	/* workaround until driver fixed */
-	if (cur)
-		last_pos = cur;
-	else
-		cur = last_pos;
+		/* workaround until driver fixed */
+		if (cur)
+			last_pos = cur;
+		else
+			cur = last_pos;
 
-	cur *= 11111;
+		cur *= 11111;
 
-	return cur;
+		return cur;
+	}
+	return GST_CLOCK_TIME_NONE;
 }
 
 static gboolean gst_dvbvideosink_unlock (GstBaseSink * basesink)
