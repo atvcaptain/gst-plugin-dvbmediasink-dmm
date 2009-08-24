@@ -1446,9 +1446,6 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 		close(self->fd);
 	}
 
-	close (READ_SOCKET (self));
-	close (WRITE_SOCKET (self));
-
 	if (self->codec_data)
 		gst_buffer_unref(self->codec_data);
 
