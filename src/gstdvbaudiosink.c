@@ -312,7 +312,7 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	GST_OBJECT_LOCK(self);
-	self->no_write |= 1;
+	self->no_write |= 2;
 	GST_OBJECT_UNLOCK(self);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock");
@@ -323,7 +323,7 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	GST_OBJECT_LOCK(self);
-	self->no_write &= ~1;
+	self->no_write &= ~2;
 	GST_OBJECT_UNLOCK(self);
 	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock_stop");
@@ -476,13 +476,13 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
 		GST_OBJECT_LOCK(self);
-		self->no_write |= 2;
+		self->no_write |= 1;
 		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		GST_OBJECT_LOCK(self);
-		self->no_write &= ~2;
+		self->no_write &= ~1;
 		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
 		break;
@@ -585,7 +585,12 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 	pfd[1].events = POLLOUT;
 
 	do {
-		GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len);
+		if (self->no_write) {
+			GST_DEBUG_OBJECT (self, "skip %d bytes because of %s", len, (self->no_write & 3) == 3 ? "unlock/flush" : self->no_write & 1 ? "flush" : "unlock");
+			break;
+		}
+		else
+			GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len);
 		if (poll(pfd, 2, -1) == -1) {
 			if (errno == EINTR)
 				continue;
@@ -605,9 +610,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 			}
 			return -2;
 		}
-		if (self->no_write)
-			break;
-		else if (pfd[1].revents & POLLOUT) {
+		if (pfd[1].revents & POLLOUT) {
 			int wr = write(self->fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {

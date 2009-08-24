@@ -558,8 +558,12 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *
 	pfd[1].events = POLLOUT | POLLPRI;
 
 	do {
-		GST_LOG_OBJECT (self, "going into poll, have %d bytes to write",
-				len);
+		if (self->no_write) {
+			GST_DEBUG_OBJECT (self, "skip %d bytes because of %s!!!", len, (self->no_write & 3 == 3) ? "unlock/flush" : self->no_write & 1 ? "flush" : "unlock");
+			break;
+		}
+		else
+			GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len);
 		if (poll(pfd, 2, -1) == -1) {
 			if (errno == EINTR) {
 				GST_DEBUG_OBJECT(self, "poll interrupted!");
@@ -610,9 +614,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *
 					g_warning ("unhandled DVBAPI Video Event %d", evt.type);
 			}
 		}
-		if (self->no_write)
-			break;
-		else if (pfd[1].revents & POLLOUT) {
+		if (pfd[1].revents & POLLOUT) {
 			int wr = write(self->fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {
