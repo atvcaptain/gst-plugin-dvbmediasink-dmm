@@ -273,11 +273,38 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 
 static void gst_dvbaudiosink_dispose (GObject * object)
 {
-	GstDVBAudioSink *self;
-	
-	self = GST_DVBAUDIOSINK (object);
-	
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (object);
+	GstState state, pending;
 	GST_DEBUG_OBJECT (self, "dispose");
+
+// hack for gstreamer decodebin2 bug... it tries to dispose .. but doesnt set the state to NULL when it is READY
+	switch(gst_element_get_state(GST_ELEMENT(object), &state, &pending, GST_CLOCK_TIME_NONE))
+	{
+	case GST_STATE_CHANGE_SUCCESS:
+		GST_DEBUG_OBJECT(self, "success");
+		if (state != GST_STATE_NULL) {
+			GST_DEBUG_OBJECT(self, "state %d in dispose.. set it to NULL (decodebin2 bug?)", state);
+			if (gst_element_set_state(GST_ELEMENT(object), GST_STATE_NULL) == GST_STATE_CHANGE_ASYNC) {
+				GST_DEBUG_OBJECT(self, "set state returned async... wait!");
+				gst_element_get_state(GST_ELEMENT(object), &state, &pending, GST_CLOCK_TIME_NONE);
+			}
+		}
+		break;
+	case GST_STATE_CHANGE_ASYNC:
+		GST_DEBUG_OBJECT(self, "async");
+		break;
+	case GST_STATE_CHANGE_FAILURE:
+		GST_DEBUG_OBJECT(self, "failure");
+		break;
+	case GST_STATE_CHANGE_NO_PREROLL:
+		GST_DEBUG_OBJECT(self, "no preroll");
+		break;
+	default:
+		break;
+	}
+// hack end
+
+	GST_DEBUG_OBJECT(self, "state in dispose %d, pending %d", state, pending);
 
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
