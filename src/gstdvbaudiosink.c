@@ -207,9 +207,9 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			}
 			else if ( !strncasecmp(string, "DM500HD", 7) ) {
 				hwtype = DM500HD;
-				GST_INFO ("model is DM500HD set broadcom caps", string);
+				GST_INFO ("model is DM500HD set broadcom dts caps", string);
 				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom));
+					gst_static_pad_template_get (&sink_factory_broadcom_dts));
 			}
 		}
 		close(fd);
