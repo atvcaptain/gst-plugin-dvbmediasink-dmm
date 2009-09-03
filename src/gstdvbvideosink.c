@@ -588,7 +588,7 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBVideoSink *self, unsigned char *
 
 	do {
 		if (self->no_write) {
-			GST_DEBUG_OBJECT (self, "skip %d bytes because of %s!!!", len, (self->no_write & 3 == 3) ? "unlock/flush" : self->no_write & 1 ? "flush" : "unlock");
+			GST_DEBUG_OBJECT (self, "skip %d bytes because of %s!!!", len, (self->no_write & 3) == 3 ? "unlock/flush" : self->no_write & 1 ? "flush" : "unlock");
 			break;
 		}
 		else
