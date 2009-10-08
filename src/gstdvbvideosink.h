@@ -72,6 +72,13 @@ typedef struct _GstDVBVideoSinkPrivate	GstDVBVideoSinkPrivate;
 
 typedef enum { CT_MPEG1, CT_MPEG2, CT_H264, CT_DIVX311, CT_MPEG4_PART2 } t_codec_type;
 
+typedef struct queue_entry
+{
+	struct queue_entry *next;
+	size_t bytes;
+	size_t offset;
+} queue_entry_t;
+
 struct _GstDVBVideoSink
 {
 	GstBaseSink element;
@@ -101,6 +108,8 @@ struct _GstDVBVideoSink
 	int no_write;
 
 	unsigned long long pts_eos;
+
+	queue_entry_t *queue;
 };
 
 struct _GstDVBVideoSinkClass 

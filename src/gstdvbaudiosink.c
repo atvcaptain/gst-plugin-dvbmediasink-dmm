@@ -266,6 +266,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	klass->aac_adts_header_valid = FALSE;
 
 	klass->no_write = 0;
+	klass->queue = NULL;
 
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
@@ -352,7 +353,6 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 	GST_OBJECT_LOCK(self);
 	self->no_write &= ~2;
 	GST_OBJECT_UNLOCK(self);
-	SEND_COMMAND (self, CONTROL_STOP);
 	GST_DEBUG_OBJECT (basesink, "unlock_stop");
 	return TRUE;
 }
@@ -494,6 +494,45 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	return TRUE;
 }
 
+void queue_push(queue_entry_t **queue_base, guint8 *data, size_t len)
+{
+	queue_entry_t *entry = malloc(sizeof(queue_entry_t)+len);
+	queue_entry_t *last = *queue_base;
+	guint8 *d = (guint8*)(entry+1);
+	memcpy(d, data, len);
+	entry->bytes = len;
+	entry->offset = 0;
+	if (!last)
+		*queue_base = entry;
+	else {
+		while(last->next)
+			last = last->next;
+		last->next = entry;
+	}
+	entry->next = NULL;
+}
+
+void queue_pop(queue_entry_t **queue_base)
+{
+	queue_entry_t *base = *queue_base;
+	*queue_base = base->next;
+	free(base);
+}
+
+int queue_front(queue_entry_t **queue_base, guint8 **data, size_t *bytes)
+{
+	if (!*queue_base) {
+		*bytes = 0;
+		*data = 0;
+	}
+	else {
+		queue_entry_t *entry = *queue_base;
+		*bytes = entry->bytes - entry->offset;
+		*data = ((guint8*)(entry+1))+entry->offset;
+	}
+	return *bytes;
+}
+
 static gboolean
 gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 {
@@ -506,12 +545,14 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		self->no_write |= 1;
 		GST_OBJECT_UNLOCK(self);
 		SEND_COMMAND (self, CONTROL_STOP);
+		break;
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		GST_OBJECT_LOCK(self);
 		self->no_write &= ~1;
+		while(self->queue)
+			queue_pop(&self->queue);
 		GST_OBJECT_UNLOCK(self);
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_EVENT_EOS:
 	{
@@ -595,7 +636,6 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 #define ASYNC_WRITE(data, len) do { \
 		switch(AsyncWrite(sink, self, data, len)) { \
 		case -1: goto poll_error; \
-		case -2: goto stopped; \
 		case -3: goto write_error; \
 		default: break; \
 		} \
@@ -612,12 +652,21 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 	pfd[1].events = POLLOUT;
 
 	do {
-		if (self->no_write) {
-			GST_DEBUG_OBJECT (self, "skip %d bytes because of %s", len, (self->no_write & 3) == 3 ? "unlock/flush" : self->no_write & 1 ? "flush" : "unlock");
+loop_start:
+		if (self->no_write & 1) {
+			GST_DEBUG_OBJECT (self, "skip %d bytes", len - written);
+			break;
+		}
+		else if (self->no_write & 2) {
+			// directly push to queue
+			GST_OBJECT_LOCK(self);
+			queue_push(&self->queue, data + written, len - written);
+			GST_OBJECT_UNLOCK(self);
+			GST_DEBUG_OBJECT (self, "pushed %d bytes to queue", len - written);
 			break;
 		}
 		else
-			GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len);
+			GST_LOG_OBJECT (self, "going into poll, have %d bytes to write", len - written);
 		if (poll(pfd, 2, -1) == -1) {
 			if (errno == EINTR)
 				continue;
@@ -632,12 +681,39 @@ static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *
 				if (res < 0) {
 					GST_DEBUG_OBJECT (self, "no more commands");
 					/* no more commands */
-					break;
+					goto loop_start;
 				}
 			}
-			return -2;
 		}
 		if (pfd[1].revents & POLLOUT) {
+			size_t queue_entry_size;
+			guint8 *queue_data;
+			GST_OBJECT_LOCK(self);
+			if (queue_front(&self->queue, &queue_data, &queue_entry_size)) {
+				int wr = write(self->fd, queue_data, queue_entry_size);
+				if (wr < 0) {
+					switch (errno) {
+						case EINTR:
+						case EAGAIN:
+							GST_OBJECT_UNLOCK(self);
+							continue;
+						default:
+							GST_OBJECT_UNLOCK(self);
+							return -3;
+					}
+				}
+				else if (wr == queue_entry_size) {
+					queue_pop(&self->queue);
+					GST_DEBUG_OBJECT (self, "written %d queue bytes... pop entry", wr);
+				}
+				else {
+					self->queue->offset += wr;
+					GST_DEBUG_OBJECT (self, "written %d queue bytes... update offset", wr);
+				}
+				GST_OBJECT_UNLOCK(self);
+				continue;
+			}
+			GST_OBJECT_UNLOCK(self);
 			int wr = write(self->fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {
@@ -790,12 +866,6 @@ write_error:
 		GST_WARNING_OBJECT (self, "Error during write");
 		return GST_FLOW_ERROR;
 	}
-stopped:
-	{
-
-		GST_DEBUG_OBJECT (self, "poll stopped");
-		return GST_FLOW_OK;
-	}
 }
 
 static gboolean
@@ -861,6 +931,9 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 	if (self->prev_data)
 		gst_buffer_unref(self->prev_data);
 
+	while(self->queue)
+		queue_pop(&self->queue);
+
 	return TRUE;
 }
 
@@ -892,15 +965,12 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
 		ioctl(self->fd, AUDIO_PAUSE);
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_READY_TO_NULL:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_NULL");
-		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	default:
 		break;

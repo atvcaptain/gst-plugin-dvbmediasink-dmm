@@ -68,6 +68,13 @@ typedef struct _GstDVBAudioSink		GstDVBAudioSink;
 typedef struct _GstDVBAudioSinkClass	GstDVBAudioSinkClass;
 typedef struct _GstDVBAudioSinkPrivate	GstDVBAudioSinkPrivate;
 
+typedef struct queue_entry
+{
+	struct queue_entry *next;
+	size_t bytes;
+	size_t offset;
+} queue_entry_t;
+
 struct _GstDVBAudioSink
 {
 	GstBaseSink element;
@@ -87,6 +94,8 @@ struct _GstDVBAudioSink
 	gboolean bypass_set;
 
 	int no_write;
+
+	queue_entry_t *queue;
 };
 
 struct _GstDVBAudioSinkClass
