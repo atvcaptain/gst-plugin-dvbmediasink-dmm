@@ -701,8 +701,7 @@ loop_start:
 					switch (errno) {
 						case EINTR:
 						case EAGAIN:
-							GST_OBJECT_UNLOCK(self);
-							continue;
+							break;
 						default:
 							GST_OBJECT_UNLOCK(self);
 							return -3;
@@ -866,7 +865,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_len = 14;
 
 		if (self->codec_data) {
-			if (self->must_send_header && !(self->no_write & 1)) {
+			if (self->must_send_header) {
 				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2) {
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);

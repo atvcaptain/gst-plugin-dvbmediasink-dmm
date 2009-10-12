@@ -695,8 +695,7 @@ loop_start:
 					switch (errno) {
 						case EINTR:
 						case EAGAIN:
-							GST_OBJECT_UNLOCK(self);
-							continue;
+							break;
 						default:
 							GST_OBJECT_UNLOCK(self);
 							return -3;
