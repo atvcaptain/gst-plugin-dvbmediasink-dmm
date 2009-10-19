@@ -657,7 +657,7 @@ loop_start:
 			GST_DEBUG_OBJECT (self, "skip %d bytes", len - written);
 			break;
 		}
-		else if (self->no_write & 2) {
+		else if (self->no_write & 6) {
 			// directly push to queue
 			GST_OBJECT_LOCK(self);
 			queue_push(&self->queue, data + written, len - written);
@@ -948,11 +948,17 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 		break;
 	case GST_STATE_CHANGE_READY_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 4;
+		GST_OBJECT_UNLOCK(self);
 		ioctl(self->fd, AUDIO_PAUSE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
 		ioctl(self->fd, AUDIO_CONTINUE);
+		GST_OBJECT_LOCK(self);
+		self->no_write &= ~4;
+		GST_OBJECT_UNLOCK(self);
 		break;
 	default:
 		break;
@@ -963,7 +969,11 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 4;
+		GST_OBJECT_UNLOCK(self);
 		ioctl(self->fd, AUDIO_PAUSE);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");

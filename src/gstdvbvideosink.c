@@ -634,7 +634,7 @@ loop_start:
 			GST_DEBUG_OBJECT (self, "skip %d bytes", len - written);
 			break;
 		}
-		else if (self->no_write & 2) {
+		else if (self->no_write & 6) {
 			// directly push to queue
 			GST_OBJECT_LOCK(self);
 			queue_push(&self->queue, data + written, len - written);
@@ -1609,11 +1609,17 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 			msg = gst_message_new_element (GST_OBJECT (element), s);
 			gst_element_post_message (GST_ELEMENT (element), msg);
 		}
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 4;
+		GST_OBJECT_UNLOCK(self);
 		ioctl(self->fd, VIDEO_FREEZE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");
 		ioctl(self->fd, VIDEO_CONTINUE);
+		GST_OBJECT_LOCK(self);
+		self->no_write &= ~4;
+		GST_OBJECT_UNLOCK(self);
 		break;
 	default:
 		break;
@@ -1624,7 +1630,11 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 	switch (transition) {
 	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PLAYING_TO_PAUSED");
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 4;
+		GST_OBJECT_UNLOCK(self);
 		ioctl(self->fd, VIDEO_FREEZE);
+		SEND_COMMAND (self, CONTROL_STOP);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_READY:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_READY");
