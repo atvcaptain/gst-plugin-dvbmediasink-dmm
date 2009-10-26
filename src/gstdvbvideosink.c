@@ -380,6 +380,7 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 #endif
 	klass->no_write = 0;
 	klass->queue = NULL;
+	klass->fd = -1;
 
 	if (f) {
 		fgets(klass->saved_fallback_framerate, 16, f);
@@ -424,11 +425,6 @@ static void gst_dvbvideosink_dispose (GObject * object)
 // hack end
 
 	GST_DEBUG_OBJECT(self, "state in dispose %d, pending %d", state, pending);
-
-	close (READ_SOCKET (self));
-	close (WRITE_SOCKET (self));
-	READ_SOCKET (self) = -1;
-	WRITE_SOCKET (self) = -1;
 
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -1500,8 +1496,6 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 
 	GST_DEBUG_OBJECT (self, "start");
 
-	self->fd = open("/dev/dvb/adapter0/video0", O_RDWR|O_NONBLOCK);
-//	self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
 
 	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {
 		perror("socketpair");
@@ -1513,9 +1507,6 @@ gst_dvbvideosink_start (GstBaseSink * basesink)
 
 	fcntl (READ_SOCKET (self), F_SETFL, O_NONBLOCK);
 	fcntl (WRITE_SOCKET (self), F_SETFL, O_NONBLOCK);
-
-	if (self->fd >= 0)
-		ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
 
 	return TRUE;
 	/* ERRORS */
@@ -1564,6 +1555,11 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 		fclose(f);
 	}
 
+	close (READ_SOCKET (self));
+	close (WRITE_SOCKET (self));
+	READ_SOCKET (self) = -1;
+	WRITE_SOCKET (self) = -1;
+
 	return TRUE;
 }
 
@@ -1579,6 +1575,14 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 		break;
 	case GST_STATE_CHANGE_READY_TO_PAUSED:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_READY_TO_PAUSED");
+
+		self->fd = open("/dev/dvb/adapter0/video0", O_RDWR|O_NONBLOCK);
+//		self->fd = open("/dump.pes", O_RDWR|O_CREAT|O_TRUNC, 0555);
+
+		GST_OBJECT_LOCK(self);
+		self->no_write |= 4;
+		GST_OBJECT_UNLOCK(self);
+
 		if (self->fd >= 0) {
 			GstStructure *s = 0;
 			GstMessage *msg = 0;
@@ -1608,11 +1612,9 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 				"progressive", G_TYPE_INT, progressive, NULL);
 			msg = gst_message_new_element (GST_OBJECT (element), s);
 			gst_element_post_message (GST_ELEMENT (element), msg);
+			ioctl(self->fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_MEMORY);
+			ioctl(self->fd, VIDEO_FREEZE);
 		}
-		GST_OBJECT_LOCK(self);
-		self->no_write |= 4;
-		GST_OBJECT_UNLOCK(self);
-		ioctl(self->fd, VIDEO_FREEZE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");

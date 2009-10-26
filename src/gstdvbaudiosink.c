@@ -267,6 +267,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 
 	klass->no_write = 0;
 	klass->queue = NULL;
+	klass->fd = -1;
 
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
@@ -306,11 +307,6 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 // hack end
 
 	GST_DEBUG_OBJECT(self, "state in dispose %d, pending %d", state, pending);
-
-	close (READ_SOCKET (self));
-	close (WRITE_SOCKET (self));
-	READ_SOCKET (self) = -1;
-	WRITE_SOCKET (self) = -1;
 
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -875,9 +871,6 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 
 	GST_DEBUG_OBJECT (self, "start");
 
-	self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
-//	self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
-
 	if (socketpair(PF_UNIX, SOCK_STREAM, 0, control_sock) < 0) {
 		perror("socketpair");
 		goto socket_pair;
@@ -889,11 +882,6 @@ gst_dvbaudiosink_start (GstBaseSink * basesink)
 	fcntl (READ_SOCKET (self), F_SETFL, O_NONBLOCK);
 	fcntl (WRITE_SOCKET (self), F_SETFL, O_NONBLOCK);
 
-	if (self->fd)
-	{
-		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
-		ioctl(self->fd, AUDIO_PLAY);
-	}
 	return TRUE;
 	/* ERRORS */
 socket_pair:
@@ -933,6 +921,11 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 	while(self->queue)
 		queue_pop(&self->queue);
 
+	close (READ_SOCKET (self));
+	close (WRITE_SOCKET (self));
+	READ_SOCKET (self) = -1;
+	WRITE_SOCKET (self) = -1;
+
 	return TRUE;
 }
 
@@ -951,6 +944,15 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 		GST_OBJECT_LOCK(self);
 		self->no_write |= 4;
 		GST_OBJECT_UNLOCK(self);
+
+		self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
+//		self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
+
+		if (self->fd) {
+			ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
+			ioctl(self->fd, AUDIO_PLAY);
+		}
+
 		ioctl(self->fd, AUDIO_PAUSE);
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
