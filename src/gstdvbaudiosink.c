@@ -137,7 +137,8 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-ac3; "
 		"audio/x-private1-ac3; "
 		"audio/x-dts; "
-		"audio/x-private1-dts")
+		"audio/x-private1-dts; "
+		"audio/x-private1-lpcm")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom =
@@ -261,7 +262,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 static void
 gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
-	klass->bypass_set = FALSE;
+	klass->bypass = -1;
 
 	klass->aac_adts_header_valid = FALSE;
 
@@ -313,7 +314,7 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 
 static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 {
-	if (self->bypass_set) {
+	if (self->bypass != -1) {
 		gint64 cur = 0;
 		static gint64 last_pos = 0;
 
@@ -362,7 +363,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	int bypass = -1;
 
 	self->skip = 0;
-	self->is_dts = 0;
+
 	if (!strcmp(type, "audio/mpeg")) {
 		gint mpegversion;
 		gst_structure_get_int (structure, "mpegversion", &mpegversion);
@@ -437,8 +438,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 						}
 					}
 				}
-				if (bypass == -1)
-					bypass = 0x0b;
+				bypass = 0x0b; // always use AAC+ ADTS yet..
 				break;
 			}
 			default:
@@ -456,19 +456,22 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 2;
 		self->skip = 2;
-		self->is_dts = 1;
 	}
 	else if (!strcmp(type, "audio/x-private1-ac3"))
 	{
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 0;
 		self->skip = 2;
-	} 
+	}
+	else if (!strcmp(type, "audio/x-private1-lpcm"))
+	{
+		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio)",type);
+		bypass = 6;
+	}
 	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
 	{
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 2;
-		self->is_dts = 1;
 	} else
 	{
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
@@ -479,14 +482,14 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
 	{
-		if (self->is_dts) {
+		if (bypass == 2) {
 			GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("hardware decoder can't be set to bypass mode type %s", type));
 			return FALSE;
 		}
 		GST_ELEMENT_WARNING (self, STREAM, DECODE, (NULL), ("hardware decoder can't be set to bypass mode %i.", bypass));
 // 		return FALSE;
 	}
-	self->bypass_set = TRUE;
+	self->bypass = bypass;
 	return TRUE;
 }
 
@@ -737,13 +740,22 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char *data = GST_BUFFER_DATA (buffer) + skip;
 	size_t pes_header_size;
 
+	/* LPCM workaround.. we also need the first two byte of the lpcm header.. (substreamid and num of frames) 
+	   i dont know why the mpegpsdemux strips out this two bytes... */
+	if (self->bypass == 6 && (data[0] < 0xA0 || data[0] > 0xAF)) {
+		if (data[-2] >= 0xA0 && data[-2] <= 0xAF) {
+			data -= 2;
+			size += 2;
+		}
+	}
+
 //	int i=0;
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
 //	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
 
-	if ( !self->bypass_set )
+	if ( self->bypass == -1 )
 	{
 		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
 		return GST_FLOW_ERROR;
@@ -757,11 +769,10 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	pes_header[2] = 1;
 	pes_header[3] = 0xC0;
 
-	if (self->is_dts) {
+	if (self->bypass == 2) {  // dts
 		int pos=0;
 		while((pos+3) < size) {
 			if (!strcmp((char*)(data+pos), "\x64\x58\x20\x25")) {  // is DTS-HD ?
-				skip += (size - pos);
 				size = pos;
 				break;
 			}
@@ -834,10 +845,11 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		self->aac_adts_header[6] = 0xFC;
 		memcpy(pes_header + pes_header_size, self->aac_adts_header, 7);
 		pes_header_size += 7;
+		size -= 7;
 	}
 
 	ASYNC_WRITE(pes_header, pes_header_size);
-	ASYNC_WRITE(data, GST_BUFFER_SIZE (buffer) - skip);
+	ASYNC_WRITE(data, size);
 
 	gst_buffer_ref(buffer);
 

@@ -83,15 +83,13 @@ struct _GstDVBAudioSink
 
 	gint control_sock[2];
 
-	gboolean is_dts;
 	int fd;
 	int skip;
+	int bypass;
 
 	GstBuffer *prev_data;
 
 	unsigned long long pts_eos;
-
-	gboolean bypass_set;
 
 	int no_write;
 
