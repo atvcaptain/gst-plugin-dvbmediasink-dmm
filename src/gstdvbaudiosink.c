@@ -181,7 +181,7 @@ gst_dvbaudiosink_base_init (gpointer klass)
 		"Felix Domke <tmbinc@elitedvb.net>"
 	};
 	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
-	
+
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
 	{
@@ -557,49 +557,25 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	{
 		struct pollfd pfd[2];
 		int retval;
-		gboolean last_diff_set;
-		long long last_diff = FALSE;
 
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
+		pfd[1].fd = self->fd;
+		pfd[1].events = POLLIN;
 
-		if (self->prev_data) {
-			int i=0;
-			for (; i < 3; ++i)  // write the last frame three times more to fill the buffer...
-				gst_dvbaudiosink_render (sink, self->prev_data);
+		retval = poll(pfd, 2, -1);
+		if (retval < 0) {
+			perror("poll in EVENT_EOS");
+			return FALSE;
 		}
 
-		do {
-			unsigned long long cur;
+		if (pfd[0].revents & POLLIN) {
+			GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
+			return FALSE;
+		}
 
-			ioctl(self->fd, AUDIO_GET_PTS, &cur);
-
-			long long diff = self->pts_eos - cur;
-
-			GST_DEBUG_OBJECT (self, "at %llx last_written_frame %llx (diff %lld)\n", cur, self->pts_eos, diff);
-
-			if ( diff <= 100 ) {
-				GST_DEBUG_OBJECT (self, "diff < 100.. so now EOS reached");
-				break;
-			}
-
-			if ( last_diff_set && last_diff == diff ) {
-				GST_DEBUG_OBJECT (self, "last_diff (%lld) equal to current diff.. so now EOS reached", last_diff);
-				break;
-			}
-
-			last_diff = diff;
-			last_diff_set = TRUE;
-
-			retval = poll(pfd, 1, 500);
-
-				/* check for flush */
-			if (pfd[0].revents & POLLIN) {
-				GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
-				return FALSE;
-			}
-		} while (1);
-
+		if (pfd[1].revents & POLLIN)
+			GST_DEBUG_OBJECT (self, "got buffer empty from driver!\n");
 		break;
 	}
 	case GST_EVENT_NEWSEGMENT:{
@@ -735,10 +711,10 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	unsigned char pes_header[64];
-	int skip = self->skip;
-	unsigned int size = GST_BUFFER_SIZE (buffer) - skip;
-	unsigned char *data = GST_BUFFER_DATA (buffer) + skip;
+	unsigned int size = GST_BUFFER_SIZE (buffer) - self->skip;
+	unsigned char *data = GST_BUFFER_DATA (buffer) + self->skip;
 	size_t pes_header_size;
+//	int i=0;
 
 	/* LPCM workaround.. we also need the first two byte of the lpcm header.. (substreamid and num of frames) 
 	   i dont know why the mpegpsdemux strips out this two bytes... */
@@ -749,7 +725,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 	}
 
-//	int i=0;
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
@@ -851,13 +826,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	ASYNC_WRITE(pes_header, pes_header_size);
 	ASYNC_WRITE(data, size);
 
-	gst_buffer_ref(buffer);
-
-	if (self->prev_data)
-		gst_buffer_unref(self->prev_data);
-
-	self->prev_data = buffer;
-
 	return GST_FLOW_OK;
 poll_error:
 	{
@@ -926,9 +894,6 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 		}
 		close(self->fd);
 	}
-
-	if (self->prev_data)
-		gst_buffer_unref(self->prev_data);
 
 	while(self->queue)
 		queue_pop(&self->queue);

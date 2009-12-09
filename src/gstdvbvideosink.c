@@ -538,43 +538,27 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	{
 		struct pollfd pfd[2];
 		int retval;
-		gboolean last_diff_set;
-		long long last_diff = FALSE;
 
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
+		pfd[1].fd = self->fd;
+		pfd[1].events = POLLIN;
 
-		do {
-			unsigned long long cur;
+		retval = poll(pfd, 2, -1);
+		if (retval < 0) {
+			perror("poll in EVENT_EOS");
+			return FALSE;
+		}
 
-			ioctl(self->fd, VIDEO_GET_PTS, &cur);
+		/* check for flush */
+		if (pfd[0].revents & POLLIN) {
+			GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
+			return FALSE;
+		}
 
-			long long diff = self->pts_eos - cur;
-
-			GST_DEBUG_OBJECT (self, "at %llx last_written_frame %llx (diff %lld)\n", cur, self->pts_eos, diff);
-
-			if ( diff <= 100 ) {
-				GST_DEBUG_OBJECT (self, "diff < 100.. so now EOS reached");
-				break;
-			}
-
-			if ( last_diff_set && last_diff == diff ) {
-				GST_DEBUG_OBJECT (self, "last_diff (%lld) equal to current diff.. so now EOS reached", last_diff);
-				break;
-			}
-
-			last_diff = diff;
-			last_diff_set = TRUE;
-
-			retval = poll(pfd, 1, 500);
-
-				/* check for flush */
-			if (pfd[0].revents & POLLIN) {
-				GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
-				return FALSE;
-			}
-		} while (1);
-
+		/* check for flush */
+		if (pfd[1].revents & POLLIN)
+			GST_DEBUG_OBJECT (self, "got buffer empty from driver!!\n");
 		break;
 	}
 	case GST_EVENT_NEWSEGMENT:{
