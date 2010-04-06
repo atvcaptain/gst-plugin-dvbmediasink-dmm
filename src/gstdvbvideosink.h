@@ -85,7 +85,6 @@ struct _GstDVBVideoSink
 
 	gint control_sock[2];
 
-	gboolean silent;
 	gint must_send_header;
 
 	GstBuffer *h264_buffer;
@@ -107,8 +106,6 @@ struct _GstDVBVideoSink
 
 	int no_write;
 
-	unsigned long long pts_eos;
-
 	queue_entry_t *queue;
 };
 
@@ -118,7 +115,7 @@ struct _GstDVBVideoSinkClass
   gint64 (*get_decoder_time) (GstDVBVideoSink *sink);
 };
 
-GType gst_gst_dvbvideosink_get_type (void);
+GType gst_dvbvideosink_get_type (void);
 
 G_END_DECLS
 

@@ -829,8 +829,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
 
-		self->pts_eos = pts;
-
 		pes_header[6] = 0x80;
 		pes_header[7] = 0x80;
 		

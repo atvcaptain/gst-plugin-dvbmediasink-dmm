@@ -114,7 +114,7 @@ enum
 
 static guint gst_dvbaudiosink_signals[LAST_SIGNAL] = { 0 };
 
-guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
+static guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
 
 static GstStaticPadTemplate sink_factory_ati_xilleon =
 GST_STATIC_PAD_TEMPLATE (
@@ -224,6 +224,9 @@ gst_dvbaudiosink_base_init (gpointer klass)
 	gst_element_class_set_details (element_class, &element_details);
 }
 
+static int
+gst_dvbaudiosink_async_write(GstDVBAudioSink *self, unsigned char *data, unsigned int len);
+
 /* initialize the plugin's class */
 static void
 gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
@@ -252,6 +255,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 		NULL, NULL, gst_dvbsink_marshal_INT64__VOID, G_TYPE_INT64, 0);
 
 	klass->get_decoder_time = gst_dvbaudiosink_get_decoder_time;
+	klass->async_write = gst_dvbaudiosink_async_write;
 }
 
 /* initialize the new element
@@ -274,7 +278,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
 }
 
-static void gst_dvbaudiosink_dispose (GObject * object)
+static void
+gst_dvbaudiosink_dispose (GObject * object)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (object);
 	GstState state, pending;
@@ -312,7 +317,8 @@ static void gst_dvbaudiosink_dispose (GObject * object)
 	G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 
-static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
+static gint64
+gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 {
 	if (self->bypass != -1) {
 		gint64 cur = 0;
@@ -333,7 +339,8 @@ static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 	return GST_CLOCK_TIME_NONE;
 }
 
-static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
+static gboolean
+gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	GST_OBJECT_LOCK(self);
@@ -344,7 +351,8 @@ static gboolean gst_dvbaudiosink_unlock (GstBaseSink * basesink)
 	return TRUE;
 }
 
-static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
+static gboolean
+gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 	GST_OBJECT_LOCK(self);
@@ -354,7 +362,7 @@ static gboolean gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 	return TRUE;
 }
 
-static gboolean 
+static gboolean
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
@@ -493,7 +501,8 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	return TRUE;
 }
 
-void queue_push(queue_entry_t **queue_base, guint8 *data, size_t len)
+static void
+queue_push(queue_entry_t **queue_base, guint8 *data, size_t len)
 {
 	queue_entry_t *entry = malloc(sizeof(queue_entry_t)+len);
 	queue_entry_t *last = *queue_base;
@@ -511,14 +520,16 @@ void queue_push(queue_entry_t **queue_base, guint8 *data, size_t len)
 	entry->next = NULL;
 }
 
-void queue_pop(queue_entry_t **queue_base)
+static void
+queue_pop(queue_entry_t **queue_base)
 {
 	queue_entry_t *base = *queue_base;
 	*queue_base = base->next;
 	free(base);
 }
 
-int queue_front(queue_entry_t **queue_base, guint8 **data, size_t *bytes)
+static int
+queue_front(queue_entry_t **queue_base, guint8 **data, size_t *bytes)
 {
 	if (!*queue_base) {
 		*bytes = 0;
@@ -609,14 +620,15 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 }
 
 #define ASYNC_WRITE(data, len) do { \
-		switch(AsyncWrite(sink, self, data, len)) { \
+		switch(gst_dvbaudiosink_async_write(self, data, len)) { \
 		case -1: goto poll_error; \
 		case -3: goto write_error; \
 		default: break; \
 		} \
 	} while(0)
 
-static int AsyncWrite(GstBaseSink * sink, GstDVBAudioSink *self, unsigned char *data, unsigned int len)
+static int
+gst_dvbaudiosink_async_write(GstDVBAudioSink *self, unsigned char *data, unsigned int len)
 {
 	unsigned int written=0;
 	struct pollfd pfd[2];
@@ -705,7 +717,6 @@ loop_start:
 	return 0;
 }
 
-
 static GstFlowReturn
 gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
@@ -762,8 +773,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
 	{
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
-
-		self->pts_eos = pts;
 
 		pes_header[6] = 0x80;
 

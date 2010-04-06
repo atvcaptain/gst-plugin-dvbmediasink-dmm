@@ -59,6 +59,8 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DVBAUDIOSINK,GstDVBAudioSink))
 #define GST_DVBAUDIOSINK_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DVBAUDIOSINK,GstDVBAudioSinkClass))
+#define GST_DVBAUDIOSINK_GET_CLASS(obj) \
+  (G_TYPE_INSTANCE_GET_CLASS ((obj),GST_TYPE_DVBAUDIOSINK,GstDVBAudioSinkClass))
 #define GST_IS_DVBAUDIOSINK(obj) \
   (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DVBAUDIOSINK))
 #define GST_IS_DVBAUDIOSINK_CLASS(klass) \
@@ -87,10 +89,6 @@ struct _GstDVBAudioSink
 	int skip;
 	int bypass;
 
-	GstBuffer *prev_data;
-
-	unsigned long long pts_eos;
-
 	int no_write;
 
 	queue_entry_t *queue;
@@ -100,9 +98,10 @@ struct _GstDVBAudioSinkClass
 {
 	GstBaseSinkClass parent_class;
 	gint64 (*get_decoder_time) (GstDVBAudioSink *sink);
+	int (*async_write) (GstDVBAudioSink *sink, unsigned char *data, unsigned int size);
 };
 
-GType gst_gst_dvbaudiosink_get_type (void);
+GType gst_dvbaudiosink_get_type (void);
 
 G_END_DECLS
 
