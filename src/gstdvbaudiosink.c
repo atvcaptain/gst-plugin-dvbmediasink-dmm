@@ -167,7 +167,7 @@ static void gst_dvbaudiosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition);
 static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self);
 
-typedef enum { DM7025, DM800, DM8000, DM500HD } hardware_type_t;
+typedef enum { DM7025, DM800, DM8000, DM500HD, DM800SE } hardware_type_t;
 
 static hardware_type_t hwtype;
 
@@ -197,6 +197,12 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
 				GST_INFO ("model is DM8000 set broadcom dts caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_broadcom_dts));
+			}
+			else if ( !strncasecmp(string, "DM800SE", 7) ) {
+				hwtype = DM800SE;
+				GST_INFO ("model is DM800SE set broadcom dts caps", string);
 				gst_element_class_add_pad_template (element_class,
 					gst_static_pad_template_get (&sink_factory_broadcom_dts));
 			}
