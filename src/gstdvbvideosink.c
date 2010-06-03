@@ -849,7 +849,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		if (self->codec_data) {
 			if (self->must_send_header) {
-				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2) {
+    				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2 && (self->codec_type != CT_DIVX4 || data[3] == 0x00)) {
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
 					if (self->codec_type == CT_DIVX311)
@@ -1206,9 +1206,9 @@ write_error:
 		GST_WARNING_OBJECT (self, "Error during write");
 		return GST_FLOW_ERROR;
 	}
-		self->must_send_header = 1;
-		if (hwtype == DM7025)
-			++self->must_send_header;  // we must send the sequence header twice on dm7025... 
+	self->must_send_header = 1;
+	if (hwtype == DM7025)
+		++self->must_send_header;  // we must send the sequence header twice on dm7025...
 }
 
 static gboolean 
@@ -1386,6 +1386,10 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			break;
 			case 4:
 				streamtype = 14;
+				self->codec_type = CT_DIVX4;
+				self->codec_data = gst_buffer_new_and_alloc(12);
+				guint8 *data = GST_BUFFER_DATA(self->codec_data);
+				memcpy(data, "\x00\x00\x01\xb2\x44\x69\x76\x58\x34\x41\x4e\x44", 12);
 				GST_INFO_OBJECT (self, "MIMETYPE video/x-divx vers. 4 -> VIDEO_SET_STREAMTYPE, 14");
 			break;
 			case 6:
