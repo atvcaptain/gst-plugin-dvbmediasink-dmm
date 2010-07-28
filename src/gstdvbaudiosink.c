@@ -122,10 +122,13 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("audio/mpeg, "
-		"mpegversion = (int) [ 1, 2 ], "
-		"layer = (int) [ 1, 2 ]; "
-		"audio/x-ac3; "
-		"audio/x-private1-ac3")
+		"mpegversion = (int) 1, "
+		"layer = (int) [ 1, 2 ], "
+		"framed = (boolean) true; "
+		"audio/x-ac3, "
+		"framed = (boolean) true; "
+		"audio/x-private1-ac3, "
+		"framed = (boolean) true")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom_dts =
@@ -133,12 +136,18 @@ GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("audio/mpeg; "
-		"audio/x-ac3; "
-		"audio/x-private1-ac3; "
-		"audio/x-dts; "
-		"audio/x-private1-dts; "
-		"audio/x-private1-lpcm")
+	GST_STATIC_CAPS ("audio/mpeg, "
+		"framed = (boolean) true; "
+		"audio/x-ac3, "
+		"framed = (boolean) true; "
+		"audio/x-private1-ac3, "
+		"framed = (boolean) true; "
+		"audio/x-dts, "
+		"framed = (boolean) true; "
+		"audio/x-private1-dts, "
+		"framed = (boolean) true; "
+		"audio/x-private1-lpcm, "
+		"framed = (boolean) true")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom =
@@ -146,9 +155,12 @@ GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("audio/mpeg; "
-		"audio/x-ac3; "
-		"audio/x-private1-ac3")
+	GST_STATIC_CAPS ("audio/mpeg, "
+		"framed = (boolean) true; "
+		"audio/x-ac3, "
+		"framed = (boolean) true; "
+		"audio/x-private1-ac3, "
+		"framed = (boolean) true")
 );
 
 #define DEBUG_INIT(bla) \
@@ -396,59 +408,66 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			case 2:
 			case 4:
 			{
-				const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
-				GST_INFO_OBJECT (self, "MIMETYPE %s version %d (AAC)", type, mpegversion);
-				if (codec_data) {
-					guint8 *h = GST_BUFFER_DATA(gst_value_get_buffer (codec_data));
-					guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
-					guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
-					guint8 channels = (h[1] & 0x78) >> 3;
-					GST_INFO_OBJECT (self, "have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-						obj_type, rate_idx, channels);
-					/* Sync point over a full byte */
-					self->aac_adts_header[0] = 0xFF;
-					/* Sync point continued over first 4 bits + static 4 bits
-					 * (ID, layer, protection)*/
-					self->aac_adts_header[1] = 0xF1;
-					if (mpegversion == 2)
-						self->aac_adts_header[1] |= 8;
-					/* Object type over first 2 bits */
-					self->aac_adts_header[2] = obj_type << 6;
-					/* rate index over next 4 bits */
-					self->aac_adts_header[2] |= rate_idx << 2;
-					/* channels over last 2 bits */
-					self->aac_adts_header[2] |= (channels & 0x4) >> 2;
-					/* channels continued over next 2 bits + 4 bits at zero */
-					self->aac_adts_header[3] = (channels & 0x3) << 6;
-					self->aac_adts_header_valid = TRUE;
-				}
+				const gchar *stream_type = gst_structure_get_string (structure, "stream-type");
+				if (!stream_type)
+					stream_type = gst_structure_get_string (structure, "stream-format");
+				if (stream_type && !strcmp(stream_type, "adts"))
+					GST_INFO_OBJECT (self, "MIMETYPE %s version %d (AAC-ADTS)", type, mpegversion);
 				else {
-					gint rate, channels, rate_idx=0, obj_type=1; // hardcoded yet.. hopefully this works every time ;)
-					GST_INFO_OBJECT (self, "no codec data");
-					if (gst_structure_get_int (structure, "rate", &rate) && gst_structure_get_int (structure, "channels", &channels)) {
-						do {
-							if (AdtsSamplingRates[rate_idx] == rate)
-								break;
-							++rate_idx;
-						} while (AdtsSamplingRates[rate_idx]);
-						if (AdtsSamplingRates[rate_idx]) {
-							GST_INFO_OBJECT (self, "mpegversion %d, channels %d, rate %d, rate_idx %d\n", mpegversion, channels, rate, rate_idx);
-							/* Sync point over a full byte */
-							self->aac_adts_header[0] = 0xFF;
-							/* Sync point continued over first 4 bits + static 4 bits
-							 * (ID, layer, protection)*/
-							self->aac_adts_header[1] = 0xF1;
-							if (mpegversion == 2)
-								self->aac_adts_header[1] |= 8;
-							/* Object type over first 2 bits */
-							self->aac_adts_header[2] = obj_type << 6;
-							/* rate index over next 4 bits */
-							self->aac_adts_header[2] |= rate_idx << 2;
-							/* channels over last 2 bits */
-							self->aac_adts_header[2] |= (channels & 0x4) >> 2;
-							/* channels continued over next 2 bits + 4 bits at zero */
-							self->aac_adts_header[3] = (channels & 0x3) << 6;
-							self->aac_adts_header_valid = TRUE;
+					const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+					GST_INFO_OBJECT (self, "MIMETYPE %s version %d (AAC-RAW)", type, mpegversion);
+					if (codec_data) {
+						guint8 *h = GST_BUFFER_DATA(gst_value_get_buffer (codec_data));
+						guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
+						guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
+						guint8 channels = (h[1] & 0x78) >> 3;
+						GST_INFO_OBJECT (self, "have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
+							obj_type, rate_idx, channels);
+						/* Sync point over a full byte */
+						self->aac_adts_header[0] = 0xFF;
+						/* Sync point continued over first 4 bits + static 4 bits
+						 * (ID, layer, protection)*/
+						self->aac_adts_header[1] = 0xF1;
+						if (mpegversion == 2)
+							self->aac_adts_header[1] |= 8;
+						/* Object type over first 2 bits */
+						self->aac_adts_header[2] = obj_type << 6;
+						/* rate index over next 4 bits */
+						self->aac_adts_header[2] |= rate_idx << 2;
+						/* channels over last 2 bits */
+						self->aac_adts_header[2] |= (channels & 0x4) >> 2;
+						/* channels continued over next 2 bits + 4 bits at zero */
+						self->aac_adts_header[3] = (channels & 0x3) << 6;
+						self->aac_adts_header_valid = TRUE;
+					}
+					else {
+						gint rate, channels, rate_idx=0, obj_type=1; // hardcoded yet.. hopefully this works every time ;)
+						GST_INFO_OBJECT (self, "no codec data");
+						if (gst_structure_get_int (structure, "rate", &rate) && gst_structure_get_int (structure, "channels", &channels)) {
+							do {
+								if (AdtsSamplingRates[rate_idx] == rate)
+									break;
+								++rate_idx;
+							} while (AdtsSamplingRates[rate_idx]);
+							if (AdtsSamplingRates[rate_idx]) {
+								GST_INFO_OBJECT (self, "mpegversion %d, channels %d, rate %d, rate_idx %d\n", mpegversion, channels, rate, rate_idx);
+								/* Sync point over a full byte */
+								self->aac_adts_header[0] = 0xFF;
+								/* Sync point continued over first 4 bits + static 4 bits
+								 * (ID, layer, protection)*/
+								self->aac_adts_header[1] = 0xF1;
+								if (mpegversion == 2)
+									self->aac_adts_header[1] |= 8;
+								/* Object type over first 2 bits */
+								self->aac_adts_header[2] = obj_type << 6;
+								/* rate index over next 4 bits */
+								self->aac_adts_header[2] |= rate_idx << 2;
+								/* channels over last 2 bits */
+								self->aac_adts_header[2] |= (channels & 0x4) >> 2;
+								/* channels continued over next 2 bits + 4 bits at zero */
+								self->aac_adts_header[3] = (channels & 0x3) << 6;
+								self->aac_adts_header_valid = TRUE;
+							}
 						}
 					}
 				}
