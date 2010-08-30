@@ -848,6 +848,14 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_len = 14;
 
 		if (self->codec_data) {
+			switch (self->codec_type) { // we must always resend the codec data before every seq header on dm8k
+			case CT_MPEG4_PART2:
+			case CT_DIVX4:
+				if (data[0] == 0xb3 || !memcmp(data, "\x00\x00\x01\xb3", 4))
+					self->must_send_header = 1;
+			default:
+				break;
+			}
 			if (self->must_send_header) {
     				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2 && (self->codec_type != CT_DIVX4 || data[3] == 0x00)) {
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
