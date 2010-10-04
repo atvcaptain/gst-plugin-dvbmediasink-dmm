@@ -286,6 +286,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
 	klass->bypass = -1;
 
+	klass->timestamp = 0;
 	klass->aac_adts_header_valid = FALSE;
 
 	klass->no_write = 0;
@@ -587,6 +588,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		self->no_write &= ~1;
 		while(self->queue)
 			queue_pop(&self->queue);
+		self->timestamp = 0;
 		GST_OBJECT_UNLOCK(self);
 		break;
 	case GST_EVENT_EOS:
@@ -749,6 +751,9 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char pes_header[64];
 	unsigned int size = GST_BUFFER_SIZE (buffer) - self->skip;
 	unsigned char *data = GST_BUFFER_DATA (buffer) + self->skip;
+	long long timestamp = GST_BUFFER_TIMESTAMP(buffer);
+	long long duration = GST_BUFFER_DURATION(buffer);
+
 	size_t pes_header_size;
 //	int i=0;
 
@@ -761,13 +766,23 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 	}
 
+	if (duration != -1 && timestamp != -1) {
+		if (self->timestamp == 0)
+			self->timestamp = timestamp;
+		else
+			timestamp = self->timestamp;
+		self->timestamp += duration;
+	}
+	else
+		self->timestamp = 0;
+
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
-//	printf("timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(buffer));
+//	printf("timestamp: %016lld, buffer timestamp: %016lld, duration %lld, diff %lld\n", timestamp, GST_BUFFER_TIMESTAMP(buffer), duration,
+//		(timestamp > GST_BUFFER_TIMESTAMP(buffer) ? timestamp - GST_BUFFER_TIMESTAMP(buffer) : GST_BUFFER_TIMESTAMP(buffer) - timestamp) / 1000000);
 
-	if ( self->bypass == -1 )
-	{
+	if ( self->bypass == -1 ) {
 		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
 		return GST_FLOW_ERROR;
 	}
@@ -795,9 +810,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		size += 7;
 
 		/* do we have a timestamp? */
-	if (GST_BUFFER_TIMESTAMP(buffer) != GST_CLOCK_TIME_NONE)
-	{
-		unsigned long long pts = GST_BUFFER_TIMESTAMP(buffer) * 9LL / 100000 /* convert ns to 90kHz */;
+	if (timestamp != GST_CLOCK_TIME_NONE) {
+		unsigned long long pts = timestamp * 9LL / 100000 /* convert ns to 90kHz */;
 
 		pes_header[6] = 0x80;
 

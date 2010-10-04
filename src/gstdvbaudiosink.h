@@ -92,6 +92,8 @@ struct _GstDVBAudioSink
 	int no_write;
 
 	queue_entry_t *queue;
+
+	unsigned long long timestamp;
 };
 
 struct _GstDVBAudioSinkClass
