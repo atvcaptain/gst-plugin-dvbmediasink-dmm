@@ -574,6 +574,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 {
 	GstDVBAudioSink *self = GST_DVBAUDIOSINK (sink);
 	GST_DEBUG_OBJECT (self, "EVENT %s", gst_event_type_get_name(GST_EVENT_TYPE (event)));
+	int ret=TRUE;
 
 	switch (GST_EVENT_TYPE (event)) {
 	case GST_EVENT_FLUSH_START:
@@ -601,19 +602,34 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		pfd[1].fd = self->fd;
 		pfd[1].events = POLLIN;
 
-		retval = poll(pfd, 2, -1);
-		if (retval < 0) {
-			perror("poll in EVENT_EOS");
-			return FALSE;
-		}
+		GST_PAD_PREROLL_UNLOCK (sink->sinkpad);
+		while (1) {
+			retval = poll(pfd, 2, 250);
+			if (retval < 0) {
+				perror("poll in EVENT_EOS");
+				ret=FALSE;
+				break;
+			}
 
-		if (pfd[0].revents & POLLIN) {
-			GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
-			return FALSE;
-		}
+			if (pfd[0].revents & POLLIN) {
+				GST_DEBUG_OBJECT (self, "wait EOS aborted!!\n");
+				ret=FALSE;
+				break;
+			}
 
-		if (pfd[1].revents & POLLIN)
-			GST_DEBUG_OBJECT (self, "got buffer empty from driver!\n");
+			if (pfd[1].revents & POLLIN) {
+				GST_DEBUG_OBJECT (self, "got buffer empty from driver!\n");
+				break;
+			}
+
+			if (sink->flushing) {
+				GST_DEBUG_OBJECT (self, "wait EOS flushing!!\n");
+				ret=FALSE;
+				break;
+			}
+		}
+		GST_PAD_PREROLL_LOCK (sink->sinkpad);
+
 		break;
 	}
 	case GST_EVENT_NEWSEGMENT:{
@@ -643,7 +659,8 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	default:
 		break;
 	}
-	return TRUE;
+
+	return ret;
 }
 
 #define ASYNC_WRITE(data, len) do { \
