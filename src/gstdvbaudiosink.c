@@ -205,6 +205,8 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			if ( !strncasecmp(string, "DM7025", 6) ) {
 				hwtype = DM7025;
 				GST_INFO ("model is DM7025 set ati xilleon caps");
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (&sink_factory_ati_xilleon));
 			}
 			else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
@@ -232,11 +234,6 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			}
 		}
 		close(fd);
-	}
-
-	if (hwtype == DM7025) {
-		gst_element_class_add_pad_template (element_class,
-			gst_static_pad_template_get (&sink_factory_ati_xilleon));
 	}
 
 	gst_element_class_set_details (element_class, &element_details);
