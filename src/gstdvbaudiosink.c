@@ -100,8 +100,10 @@ G_STMT_START {						\
 } G_STMT_END
 
 #ifndef AUDIO_GET_PTS
-#define AUDIO_GET_PTS		_IOR('o', 19, gint64)
+#define AUDIO_GET_PTS           _IOR('o', 19, gint64)
 #endif
+
+#define PROP_LOCATION 99
 
 GST_DEBUG_CATEGORY_STATIC (dvbaudiosink_debug);
 #define GST_CAT_DEFAULT dvbaudiosink_debug
@@ -167,6 +169,9 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_DEBUG_CATEGORY_INIT (dvbaudiosink_debug, "dvbaudiosink", 0, "dvbaudiosink element");
 
 GST_BOILERPLATE_FULL (GstDVBAudioSink, gst_dvbaudiosink, GstBaseSink, GST_TYPE_BASE_SINK, DEBUG_INIT);
+
+static void gst_dvbaudiosink_set_property (GObject * object, guint prop_id, const GValue * value, GParamSpec * pspec);
+static void gst_dvbaudiosink_get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec);
 
 static gboolean gst_dvbaudiosink_start (GstBaseSink * sink);
 static gboolean gst_dvbaudiosink_stop (GstBaseSink * sink);
@@ -257,6 +262,12 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	GstElementClass *gelement_class = GST_ELEMENT_CLASS (klass);
 
 	gobject_class->dispose = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_dispose);
+	gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_property);
+	gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_property);
+	g_object_class_install_property (gobject_class, PROP_LOCATION,
+		g_param_spec_string ("dump-filename", "Dump File Location",
+			"Filename that Packetized Elementary Stream will be written to", NULL,
+			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	gstbasesink_class->start = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_start);
 	gstbasesink_class->stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_stop);
@@ -295,6 +306,8 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 	klass->no_write = 0;
 	klass->queue = NULL;
 	klass->fd = -1;
+	klass->dump_fd = -1;
+	klass->dump_filename = NULL;
 
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
@@ -336,7 +349,68 @@ gst_dvbaudiosink_dispose (GObject * object)
 
 	GST_DEBUG_OBJECT(self, "state in dispose %d, pending %d", state, pending);
 
+	if (self->dump_filename)
+	{
+			g_free (self->dump_filename);
+			self->dump_filename = NULL;
+	}
+
 	G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static gboolean
+gst_dvbaudiosink_set_location (GstDVBAudioSink * sink, const gchar * location)
+{
+	if (sink->dump_fd)
+		goto was_open;
+
+	g_free (sink->dump_filename);
+	if (location != NULL) {
+		/* we store the filename as we received it from the application. On Windows
+		* this should be in UTF8 */
+		sink->dump_filename = g_strdup (location);
+	} else {
+		sink->dump_filename = NULL;
+	}
+
+	return TRUE;
+
+	/* ERRORS */
+	was_open:
+	{
+		g_warning ("Changing the `dump-filename' property during operation is not supported.");
+		return FALSE;
+	}
+}
+
+static void
+gst_dvbaudiosink_set_property (GObject * object, guint prop_id, const GValue * value, GParamSpec * pspec)
+{
+	GstDVBAudioSink *sink = GST_DVBAUDIOSINK (object);
+
+	switch (prop_id) {
+		case PROP_LOCATION:
+		gst_dvbaudiosink_set_location (sink, g_value_get_string (value));
+		break;
+		default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+		break;
+	}
+}
+
+static void
+gst_dvbaudiosink_get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec)
+{
+	GstDVBAudioSink *sink = GST_DVBAUDIOSINK (object);
+
+	switch (prop_id) {
+		case PROP_LOCATION:
+		g_value_set_string (value, sink->dump_filename);
+		break;
+		default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+		break;
+	}
 }
 
 static gint64
@@ -725,6 +799,8 @@ loop_start:
 			GST_OBJECT_LOCK(self);
 			if (queue_front(&self->queue, &queue_data, &queue_entry_size)) {
 				int wr = write(self->fd, queue_data, queue_entry_size);
+				if ( self->dump_fd > 0 )
+						write(self->dump_fd, queue_data, queue_entry_size);
 				if (wr < 0) {
 					switch (errno) {
 						case EINTR:
@@ -748,6 +824,8 @@ loop_start:
 			}
 			GST_OBJECT_UNLOCK(self);
 			int wr = write(self->fd, data+written, len - written);
+			if ( self->dump_fd > 0 )
+					write(self->dump_fd, data+written, len - written);
 			if (wr < 0) {
 				switch (errno) {
 					case EINTR:
@@ -962,6 +1040,8 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 		}
 		close(self->fd);
 	}
+	if (self->dump_fd > 0)
+		close(self->dump_fd);
 
 	while(self->queue)
 		queue_pop(&self->queue);
@@ -990,15 +1070,16 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 		self->no_write |= 4;
 		GST_OBJECT_UNLOCK(self);
 
-		self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
-//		self->fd = open("/dump.pes", O_RDWR|O_CREAT, 0555);
+		if (self->dump_filename)
+				self->dump_fd = open(self->dump_filename, O_RDWR|O_CREAT, 0555);
 
+		self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
 		if (self->fd) {
-			ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
-			ioctl(self->fd, AUDIO_PLAY);
-		}
+				ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
+				ioctl(self->fd, AUDIO_PLAY);
 
 		ioctl(self->fd, AUDIO_PAUSE);
+		}
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 		GST_DEBUG_OBJECT (self,"GST_STATE_CHANGE_PAUSED_TO_PLAYING");

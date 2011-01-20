@@ -85,7 +85,10 @@ struct _GstDVBAudioSink
 
 	gint control_sock[2];
 
+	gchar *dump_filename;
 	int fd;
+	int dump_fd;
+
 	int skip;
 	int bypass;
 
