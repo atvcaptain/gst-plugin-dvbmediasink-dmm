@@ -202,8 +202,8 @@ gst_dvbaudiosink_base_init (gpointer klass)
 	int fd = open("/proc/stb/info/model", O_RDONLY);
 	if ( fd > 0 )
 	{
-		gchar string[8] = { 0, };
-		ssize_t rd = read(fd, string, 7);
+		gchar string[9] = { 0, };
+		ssize_t rd = read(fd, string, 8);
 		if ( rd >= 5 )
 		{
 			string[rd] = 0;
