@@ -534,12 +534,12 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, VIDEO_CLEAR_BUFFER);
 		GST_OBJECT_LOCK(self);
-		self->no_write &= ~1;
 		self->must_send_header = 1;
 		if (hwtype == DM7025)
 			++self->must_send_header;  // we must send the sequence header twice on dm7025... 
 		while (self->queue)
 			queue_pop(&self->queue);
+		self->no_write &= ~1;
 		GST_OBJECT_UNLOCK(self);
 		break;
 	case GST_EVENT_EOS:

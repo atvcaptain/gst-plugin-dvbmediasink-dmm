@@ -657,10 +657,10 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 	case GST_EVENT_FLUSH_STOP:
 		ioctl(self->fd, AUDIO_CLEAR_BUFFER);
 		GST_OBJECT_LOCK(self);
-		self->no_write &= ~1;
 		while(self->queue)
 			queue_pop(&self->queue);
 		self->timestamp = 0;
+		self->no_write &= ~1;
 		GST_OBJECT_UNLOCK(self);
 		break;
 	case GST_EVENT_EOS:
