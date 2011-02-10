@@ -557,42 +557,36 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				break;
 		}
 	}
-	else if (!strcmp(type, "audio/x-ac3") || !strcmp(type, "audio/ac3"))
-	{
+	else if (!strcmp(type, "audio/x-ac3")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 0;
 	}
-	else if (!strcmp(type, "audio/x-private1-dts"))
-	{
+	else if (!strcmp(type, "audio/x-private1-dts")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 2;
 		self->skip = 2;
 	}
-	else if (!strcmp(type, "audio/x-private1-ac3"))
-	{
+	else if (!strcmp(type, "audio/x-private1-ac3")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 0;
 		self->skip = 2;
 	}
-	else if (!strcmp(type, "audio/x-private1-lpcm"))
-	{
+	else if (!strcmp(type, "audio/x-private1-lpcm")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio)",type);
 		bypass = 6;
 	}
-	else if (!strcmp(type, "audio/x-dts") || !strcmp(type, "audio/dts"))
-	{
+	else if (!strcmp(type, "audio/x-dts")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 2;
-	} else
-	{
+	}
+	else {
 		GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("unimplemented stream type %s", type));
 		return FALSE;
 	}
 
 	GST_INFO_OBJECT(self, "setting dvb mode 0x%02x\n", bypass);
 
-	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0)
-	{
+	if (ioctl(self->fd, AUDIO_SET_BYPASS_MODE, bypass) < 0) {
 		if (bypass == 2) {
 			GST_ELEMENT_ERROR (self, STREAM, TYPE_NOT_FOUND, (NULL), ("hardware decoder can't be set to bypass mode type %s", type));
 			return FALSE;
@@ -719,8 +713,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		GST_DEBUG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
 
 		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
-		if (fmt == GST_FORMAT_TIME)
-		{
+		if (fmt == GST_FORMAT_TIME) {
 			if ( rate > 1 )
 				skip = (int) rate;
 			else if ( rate < 1 )
@@ -1025,21 +1018,20 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 
 	GST_DEBUG_OBJECT (self, "stop");
 
-	if (self->fd >= 0)
-	{
+	if (self->fd >= 0) {
 		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 
 		ioctl(self->fd, AUDIO_STOP);
 		ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_DEMUX);
 
-		if ( video_fd > 0 )
-		{
+		if ( video_fd > 0 ) {
 			ioctl(video_fd, VIDEO_SLOWMOTION, 0);
 			ioctl(video_fd, VIDEO_FAST_FORWARD, 0);
 			close (video_fd);
 		}
 		close(self->fd);
 	}
+
 	if (self->dump_fd > 0)
 		close(self->dump_fd);
 
@@ -1074,11 +1066,11 @@ gst_dvbaudiosink_change_state (GstElement * element, GstStateChange transition)
 				self->dump_fd = open(self->dump_filename, O_RDWR|O_CREAT, 0555);
 
 		self->fd = open("/dev/dvb/adapter0/audio0", O_RDWR|O_NONBLOCK);
-		if (self->fd) {
-				ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
-				ioctl(self->fd, AUDIO_PLAY);
 
-		ioctl(self->fd, AUDIO_PAUSE);
+		if (self->fd) {
+			ioctl(self->fd, AUDIO_SELECT_SOURCE, AUDIO_SOURCE_MEMORY);
+			ioctl(self->fd, AUDIO_PLAY);
+			ioctl(self->fd, AUDIO_PAUSE);
 		}
 		break;
 	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
