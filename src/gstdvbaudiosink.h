@@ -89,6 +89,11 @@ struct _GstDVBAudioSink
 	int fd;
 	int dump_fd;
 
+	gint block_align;
+	gint temp_offset;
+	gint temp_bytes;
+	GstBuffer *temp_buffer;
+
 	int skip;
 	int bypass;
 

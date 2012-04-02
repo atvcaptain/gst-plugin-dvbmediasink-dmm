@@ -874,7 +874,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				break;
 			}
 			if (self->must_send_header) {
-    				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2 && (self->codec_type != CT_DIVX4 || data[3] == 0x00)) {
+				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2 && (self->codec_type != CT_DIVX4 || data[3] == 0x00)) {
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
 					if (self->codec_type == CT_DIVX311)

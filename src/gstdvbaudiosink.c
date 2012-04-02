@@ -118,6 +118,15 @@ static guint gst_dvbaudiosink_signals[LAST_SIGNAL] = { 0 };
 
 static guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
 
+#define X_RAW_INT(WIDTH, DEPTH) \
+		"audio/x-raw-int, " \
+		"endianess = (int) 1234, " \
+		"signed = (boolean) { TRUE, FALSE }, " \
+		"rate = (int) { 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000 }, " \
+		"channels = (int) [ 1, 2 ], " \
+		"width = (int) " #WIDTH ", " \
+		"depth = (int) " #DEPTH "; "
+
 static GstStaticPadTemplate sink_factory_ati_xilleon =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -138,7 +147,13 @@ GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("audio/mpeg, "
+	GST_STATIC_CAPS (
+		X_RAW_INT(8,8)
+		X_RAW_INT(16,16)
+		X_RAW_INT(24,24)
+		X_RAW_INT(32,24)
+		X_RAW_INT(32,32)
+		"audio/mpeg, "
 		"framed = (boolean) true; "
 		"audio/x-ac3, "
 		"framed = (boolean) true; "
@@ -300,8 +315,10 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
 	klass->bypass = -1;
 
-	klass->timestamp = 0;
+	klass->timestamp = -1;
 	klass->aac_adts_header_valid = FALSE;
+	klass->temp_buffer = NULL;
+	klass->temp_bytes = 0;
 
 	klass->no_write = 0;
 	klass->queue = NULL;
@@ -467,6 +484,7 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	int bypass = -1;
 
 	self->skip = 0;
+	self->block_align = 0;
 
 	if (!strcmp(type, "audio/mpeg")) {
 		gint mpegversion;
@@ -575,6 +593,47 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio)",type);
 		bypass = 6;
 	}
+	else if (!strcmp(type, "audio/x-raw-int")) {
+		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
+		bypass = 0xf;
+		gint block_align, width, rate, depth, channels, bitrate;
+		gst_structure_get_int (structure, "channels", &channels);
+		gst_structure_get_int (structure, "rate", &rate);
+		gst_structure_get_int (structure, "width", &width);
+		gst_structure_get_int (structure, "depth", &depth);
+		// calc size of pcm data for 30ms
+		self->block_align = rate * 30 / 1000;
+		self->block_align *= channels * depth / 8;
+		block_align = channels * width / 8;
+		bitrate = channels * rate * width;
+		self->temp_offset = 18+8;
+		self->temp_buffer = gst_buffer_new_and_alloc(self->temp_offset+self->block_align);
+		guint8 *d = GST_BUFFER_DATA(self->temp_buffer);
+		memcpy(d, "BCMA", 4);
+		d[4] = (self->block_align & 0xFF000000) >> 24;
+		d[5] = (self->block_align & 0xFF0000) >> 16;
+		d[6] = (self->block_align & 0xFF00) >> 8;
+		d[7] = (self->block_align & 0xFF);
+		// rebuild WAVFORMAT
+		d[8] = 0x01; // format tag
+		d[9] = 0x00;
+		d[10] = channels & 0xFF;
+		d[11] = (channels >> 8) & 0xFF;
+		d[12] = rate & 0xFF; // sample rate
+		d[13] = (rate & 0xFF00) >> 8;
+		d[14] = (rate & 0xFF0000) >> 16;
+		d[15] = (rate & 0xFF000000) >> 24;
+		d[16] = (bitrate >> 3) & 0xFF; // byte rate
+		d[17] = (bitrate >> 11) & 0xFF;
+		d[18] = (bitrate >> 19) & 0xFF;
+		d[19] = (bitrate >> 27) & 0xFF;
+		d[20] = block_align & 0xFF; // block align
+		d[21] = (block_align >> 8) & 0xFF;
+		d[22] = depth & 0xFF; // word size
+		d[23] = (depth >> 8) & 0xFF;
+		d[24] = 0; // codec data len
+		d[25] = 0;
+	}
 	else if (!strcmp(type, "audio/x-dts")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
 		bypass = 2;
@@ -659,7 +718,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		GST_OBJECT_LOCK(self);
 		while(self->queue)
 			queue_pop(&self->queue);
-		self->timestamp = 0;
+		self->timestamp = -1;
 		self->no_write &= ~1;
 		GST_OBJECT_UNLOCK(self);
 		break;
@@ -708,21 +767,23 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		gboolean update;
 		gdouble rate, applied_rate;
 		gint64 cur, stop, time;
-		int skip = 0, repeat = 0, ret;
+		int skip = 0, repeat = 0;
 		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
 		GST_DEBUG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
 
-		int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
 		if (fmt == GST_FORMAT_TIME) {
-			if ( rate > 1 )
-				skip = (int) rate;
-			else if ( rate < 1 )
-				repeat = 1.0/rate;
-			ret = ioctl(video_fd, VIDEO_SLOWMOTION, repeat);
-			ret = ioctl(video_fd, VIDEO_FAST_FORWARD, skip);
-//			gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
+			int video_fd = open("/dev/dvb/adapter0/video0", O_RDWR);
+			if (video_fd >= 0) {
+				if ( rate > 1 )
+					skip = (int) rate;
+				else if ( rate < 1 )
+					repeat = 1.0/rate;
+				ioctl(video_fd, VIDEO_SLOWMOTION, repeat);
+				ioctl(video_fd, VIDEO_FAST_FORWARD, skip);
+//				gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
+				close(video_fd);
+			}
 		}
-		close(video_fd);
 		break;
 	}
 
@@ -844,6 +905,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char *data = GST_BUFFER_DATA (buffer) + self->skip;
 	long long timestamp = GST_BUFFER_TIMESTAMP(buffer);
 	long long duration = GST_BUFFER_DURATION(buffer);
+	unsigned int bytes_left = size;
+	int num_blocks = self->block_align ? size / self->block_align : 1;
 
 	size_t pes_header_size;
 //	int i=0;
@@ -855,23 +918,26 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			data -= 2;
 			size += 2;
 		}
+		else
+			GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("lpcm broken!"));
 	}
 
-	if (duration != -1 && timestamp != -1) {
-		if (self->timestamp == 0)
+	if (duration != -1 && timestamp != -1 && self->bypass != 0xd && self->bypass != 0xe) {
+		if (self->timestamp == -1)
 			self->timestamp = timestamp;
 		else
 			timestamp = self->timestamp;
-		self->timestamp += duration;
+		if (self->bypass < 0xd)
+			self->timestamp += duration;
 	}
 	else
-		self->timestamp = 0;
+		self->timestamp = -1;
 
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
-//	printf("timestamp: %016lld, buffer timestamp: %016lld, duration %lld, diff %lld\n", timestamp, GST_BUFFER_TIMESTAMP(buffer), duration,
-//		(timestamp > GST_BUFFER_TIMESTAMP(buffer) ? timestamp - GST_BUFFER_TIMESTAMP(buffer) : GST_BUFFER_TIMESTAMP(buffer) - timestamp) / 1000000);
+//	printf("timestamp: %016lld, buffer timestamp: %016lld, duration %lld, diff %lld, num_blocks %d\n", timestamp, GST_BUFFER_TIMESTAMP(buffer), duration,
+//		(timestamp > GST_BUFFER_TIMESTAMP(buffer) ? timestamp - GST_BUFFER_TIMESTAMP(buffer) : GST_BUFFER_TIMESTAMP(buffer) - timestamp) / 1000000, num_blocks);
 
 	if ( self->bypass == -1 ) {
 		GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("hardware decoder not setup (no caps in pipeline?)"));
@@ -899,7 +965,10 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	if (self->aac_adts_header_valid)
 		size += 7;
+	else if (self->temp_buffer)
+		size = self->block_align + self->temp_offset;
 
+next_chunk:
 		/* do we have a timestamp? */
 	if (timestamp != GST_CLOCK_TIME_NONE) {
 		unsigned long long pts = timestamp * 9LL / 100000 /* convert ns to 90kHz */;
@@ -961,9 +1030,38 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_size += 7;
 		size -= 7;
 	}
+	else if (self->temp_buffer) {
+		guint8 *d = GST_BUFFER_DATA(self->temp_buffer) + self->temp_offset + self->temp_bytes;
+		guint cp_size = self->block_align - self->temp_bytes;
+		if (bytes_left < cp_size)
+			cp_size = bytes_left;
+		memcpy(d, data, cp_size);
+		data += cp_size;
+		bytes_left -= cp_size;
+		self->temp_bytes += cp_size;
+	}
 
-	ASYNC_WRITE(pes_header, pes_header_size);
-	ASYNC_WRITE(data, size);
+	if (!self->temp_buffer || self->temp_bytes == self->block_align) {
+		ASYNC_WRITE(pes_header, pes_header_size);
+		if (!self->temp_buffer)
+			ASYNC_WRITE(data, size);
+		else {
+			ASYNC_WRITE(GST_BUFFER_DATA(self->temp_buffer), GST_BUFFER_SIZE(self->temp_buffer));
+			self->temp_bytes = 0;
+			if (self->bypass == 0xf) {
+				self->timestamp += 30*1000000; // always 30ms per chunk
+				timestamp += 30*1000000;
+			}
+			else if (self->bypass == 0xd || self->bypass == 0xe) {
+				self->timestamp += duration/num_blocks;
+				timestamp += duration/num_blocks;
+			}
+			else
+				timestamp = GST_CLOCK_TIME_NONE;
+			if (bytes_left)
+				goto next_chunk;
+		}
+	}
 
 	return GST_FLOW_OK;
 poll_error:
@@ -1037,6 +1135,9 @@ gst_dvbaudiosink_stop (GstBaseSink * basesink)
 
 	while(self->queue)
 		queue_pop(&self->queue);
+
+	if (self->temp_buffer)
+		gst_buffer_unref(self->temp_buffer);
 
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
