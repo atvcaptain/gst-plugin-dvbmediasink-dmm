@@ -101,7 +101,7 @@ struct _GstDVBAudioSink
 
 	queue_entry_t *queue;
 
-	unsigned long long timestamp;
+	GstClockTime timestamp;
 };
 
 struct _GstDVBAudioSinkClass

@@ -315,7 +315,7 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 {
 	klass->bypass = -1;
 
-	klass->timestamp = -1;
+	klass->timestamp = GST_CLOCK_TIME_NONE;
 	klass->aac_adts_header_valid = FALSE;
 	klass->temp_buffer = NULL;
 	klass->temp_bytes = 0;
@@ -718,7 +718,7 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		GST_OBJECT_LOCK(self);
 		while(self->queue)
 			queue_pop(&self->queue);
-		self->timestamp = -1;
+		self->timestamp = GST_CLOCK_TIME_NONE;
 		self->no_write &= ~1;
 		GST_OBJECT_UNLOCK(self);
 		break;
@@ -903,8 +903,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned char pes_header[64];
 	unsigned int size = GST_BUFFER_SIZE (buffer) - self->skip;
 	unsigned char *data = GST_BUFFER_DATA (buffer) + self->skip;
-	long long timestamp = GST_BUFFER_TIMESTAMP(buffer);
-	long long duration = GST_BUFFER_DURATION(buffer);
+	GstClockTime timestamp = GST_BUFFER_TIMESTAMP(buffer);
+	GstClockTime duration = GST_BUFFER_DURATION(buffer);
 	unsigned int bytes_left = size;
 	int num_blocks = self->block_align ? size / self->block_align : 1;
 
@@ -922,8 +922,8 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("lpcm broken!"));
 	}
 
-	if (duration != -1 && timestamp != -1 && self->bypass != 0xd && self->bypass != 0xe) {
-		if (self->timestamp == -1)
+	if (duration != GST_CLOCK_TIME_NONE && timestamp != GST_CLOCK_TIME_NONE && self->bypass != 0xd && self->bypass != 0xe) {
+		if (self->timestamp == GST_CLOCK_TIME_NONE)
 			self->timestamp = timestamp;
 		else
 			timestamp = self->timestamp;
@@ -931,12 +931,12 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			self->timestamp += duration;
 	}
 	else
-		self->timestamp = -1;
+		self->timestamp = GST_CLOCK_TIME_NONE;
 
 //	for (;i < (size > 0x1F ? 0x1F : size); ++i)
 //		printf("%02x ", data[i]);
 //	printf("%d bytes\n", size);
-//	printf("timestamp: %016lld, buffer timestamp: %016lld, duration %lld, diff %lld, num_blocks %d\n", timestamp, GST_BUFFER_TIMESTAMP(buffer), duration,
+//	printf("timestamp(A): %016lld, buffer timestamp: %016lld, duration %lld, diff %lld, num_blocks %d\n", timestamp, GST_BUFFER_TIMESTAMP(buffer), duration,
 //		(timestamp > GST_BUFFER_TIMESTAMP(buffer) ? timestamp - GST_BUFFER_TIMESTAMP(buffer) : GST_BUFFER_TIMESTAMP(buffer) - timestamp) / 1000000, num_blocks);
 
 	if ( self->bypass == -1 ) {
