@@ -142,6 +142,10 @@ GST_STATIC_PAD_TEMPLATE (
 		"framed = (boolean) true")
 );
 
+/* take care when you add or remove caps here!!!
+ * position 11 must be WMA !!!
+ * see gst_dvbaudiosink_get_caps
+ */
 static GstStaticPadTemplate sink_factory_broadcom_dts =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -164,7 +168,9 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-private1-dts, "
 		"framed = (boolean) true; "
 		"audio/x-private1-lpcm, "
-		"framed = (boolean) true")
+		"framed = (boolean) true; "
+		"audio/x-wma, "
+		"framed = (boolean) true;")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom =
@@ -202,6 +208,7 @@ static gint64 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self);
 typedef enum { DM7025, DM800, DM8000, DM500HD, DM800SE, DM7020HD } hardware_type_t;
 
 static hardware_type_t hwtype;
+static GstStaticPadTemplate *hwtemplate;
 
 static void
 gst_dvbaudiosink_base_init (gpointer klass)
@@ -224,45 +231,64 @@ gst_dvbaudiosink_base_init (gpointer klass)
 			string[rd] = 0;
 			if ( !strncasecmp(string, "DM7025", 6) ) {
 				hwtype = DM7025;
+				hwtemplate = &sink_factory_ati_xilleon;
 				GST_INFO ("model is DM7025 set ati xilleon caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_ati_xilleon));
 			}
 			else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
+				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM8000 set broadcom dts caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom_dts));
 			}
 			else if ( !strncasecmp(string, "DM800SE", 7) ) {
 				hwtype = DM800SE;
+				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM800SE set broadcom dts caps", string);
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom_dts));
 			}
 			else if ( !strncasecmp(string, "DM7020HD", 8) ) {
 				hwtype = DM7020HD;
+				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM7020HD set broadcom dts caps", string);
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom_dts));
 			}
 			else if ( !strncasecmp(string, "DM800", 5) ) {
 				hwtype = DM800;
+				hwtemplate = &sink_factory_broadcom;
 				GST_INFO ("model is DM800 set broadcom caps", string);
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom));
 			}
 			else if ( !strncasecmp(string, "DM500HD", 7) ) {
 				hwtype = DM500HD;
+				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM500HD set broadcom dts caps", string);
+			}
+			if (hwtemplate) {
 				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_broadcom_dts));
+					gst_static_pad_template_get (hwtemplate));
 			}
 		}
 		close(fd);
 	}
 
 	gst_element_class_set_details (element_class, &element_details);
+}
+
+static GstCaps *
+gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
+{
+//	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
+//	gchar *strcaps;
+	GstCaps *caps;
+
+	if (hwtype != DM7020HD && hwtemplate == &sink_factory_broadcom_dts) {
+		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
+		gst_caps_remove_structure(caps, 11); // remove WMA!!
+	}
+	else
+		caps = gst_static_caps_get(&hwtemplate->static_caps);
+
+//	strcaps = gst_caps_to_string(caps);
+//	GST_INFO_OBJECT (self, "dynamic caps for model %d '%s'", hwtype, gst_caps_to_string(caps));
+//	g_free(strcaps);
+
+	return caps;
 }
 
 static int
@@ -291,6 +317,7 @@ gst_dvbaudiosink_class_init (GstDVBAudioSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_set_caps);
+	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_get_caps);
 
 	gelement_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbaudiosink_change_state);
 
@@ -592,6 +619,62 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	else if (!strcmp(type, "audio/x-private1-lpcm")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio)",type);
 		bypass = 6;
+	}
+	else if (!strcmp(type, "audio/x-wma")) {
+		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+		if (codec_data) {
+			GstBuffer *b = gst_value_get_buffer (codec_data);
+			guint8 *cd = GST_BUFFER_DATA(b);
+			guint clen = GST_BUFFER_SIZE(b);
+			gint version;
+			gst_structure_get_int (structure, "wmaversion", &version);
+			GST_INFO_OBJECT (self, "MIMETYPE %s",type);
+			if (version == 2)
+				bypass = 0xd;
+			else if (version == 3)
+				bypass = 0xe;
+			else
+				GST_ERROR_OBJECT(self, "unsupported wma version %d!", version);
+			if (bypass != -1) {
+				gint channels, rate, bitrate, depth;
+				int codec = version + 0x15f; /*GST_RIFF_WAVE_FORMAT_WMAV1 - 1*/;
+				gst_structure_get_int (structure, "block_align", &self->block_align);
+				gst_structure_get_int (structure, "channels", &channels);
+				gst_structure_get_int (structure, "rate", &rate);
+				gst_structure_get_int (structure, "bitrate", &bitrate);
+				gst_structure_get_int (structure, "depth", &depth);
+				self->temp_offset = 18+8+clen;
+				self->temp_buffer = gst_buffer_new_and_alloc(self->temp_offset+self->block_align);
+				guint8 *d = GST_BUFFER_DATA(self->temp_buffer);
+				memcpy(d, "BCMA", 4);
+				d[4] = (self->block_align & 0xFF000000) >> 24;
+				d[5] = (self->block_align & 0xFF0000) >> 16;
+				d[6] = (self->block_align & 0xFF00) >> 8;
+				d[7] = (self->block_align & 0xFF);
+				// rebuild WAVFORMATEX
+				d[8] = (codec & 0xFF);
+				d[9] = (codec & 0xFF00) >> 8;
+				d[10] = channels & 0xFF;
+				d[11] = (channels >> 8) & 0xFF;
+				d[12] = rate & 0xFF; // sample rate
+				d[13] = (rate & 0xFF00) >> 8;
+				d[14] = (rate & 0xFF0000) >> 16;
+				d[15] = (rate & 0xFF000000) >> 24;
+				d[16] = (bitrate >> 3) & 0xFF; // byte rate
+				d[17] = (bitrate >> 11) & 0xFF;
+				d[18] = (bitrate >> 19) & 0xFF;
+				d[19] = (bitrate >> 27) & 0xFF;
+				d[20] = d[7]; // block align
+				d[21] = d[6];
+				d[22] = depth & 0xFF; // word size
+				d[23] = (depth >> 8) & 0xFF;
+				d[24] = clen & 0xFF; // codec data len
+				d[25] = (clen >> 8) & 0xFF;
+				memcpy(d+18+8, cd, clen);
+			}
+		}
+		else
+			GST_ERROR_OBJECT(self, "no wma codec data!");
 	}
 	else if (!strcmp(type, "audio/x-raw-int")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
