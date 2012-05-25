@@ -1,4 +1,5 @@
 AC_INIT
+AC_CONFIG_MACRO_DIR([m4])
 
 dnl versions of gstreamer and plugins-base
 GST_MAJORMINOR=0.10
