@@ -188,21 +188,25 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/mpeg, "
 		"mpegversion = (int) { 1, 2, 4 }, "
 		"systemstream = (boolean) false, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-h264, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-h263, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-msmpeg, "
-	MPEG4V2_LIMITED_CAPS ", mspegversion = (int) 43; "
+		MPEG4V2_LIMITED_CAPS ", mspegversion = (int) 43; "
 		"video/x-divx, "
-	MPEG4V2_LIMITED_CAPS ", divxversion = (int) [ 3, 5 ]; "
+		MPEG4V2_LIMITED_CAPS ", divxversion = (int) [ 3, 5 ]; "
 		"video/x-xvid, "
-	MPEG4V2_LIMITED_CAPS "; "
+		MPEG4V2_LIMITED_CAPS "; "
 		"video/x-3ivx, "
-	MPEG4V2_LIMITED_CAPS "; ")
+		MPEG4V2_LIMITED_CAPS "; ")
 );
 
+/* take care when you add or remove caps here!!!
+ * position 7 must be WMV !!!
+ * see gst_dvbvideosink_get_caps
+ */
 static GstStaticPadTemplate sink_factory_bcm7405 =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -212,21 +216,23 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/mpeg, "
 		"mpegversion = (int) { 1, 2, 4 }, "
 		"systemstream = (boolean) false, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-msmpeg, "
-	COMMON_VIDEO_CAPS ", mspegversion = (int) 43; "
+		COMMON_VIDEO_CAPS ", mspegversion = (int) 43; "
 		"video/x-h264, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-h263, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-divx, "
-	COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
+		COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 5 ]; "
 		"video/x-xvid, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-3ivx, "
-	COMMON_VIDEO_CAPS "; ")
+		COMMON_VIDEO_CAPS "; "
+		"video/x-wmv, "
+		"wmvversion = (int) 3, "
+		COMMON_VIDEO_CAPS "; ")
 );
-
 
 static GstStaticPadTemplate sink_factory_bcm7401 =
 GST_STATIC_PAD_TEMPLATE (
@@ -237,11 +243,11 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/mpeg, "
 		"mpegversion = (int) { 1, 2, 4 }, "
 		"systemstream = (boolean) false, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-h264, "
-	COMMON_VIDEO_CAPS "; "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-h263, "
-	COMMON_VIDEO_CAPS "; ")
+		COMMON_VIDEO_CAPS "; ")
 );
 
 static GstStaticPadTemplate sink_factory_ati_xilleon =
@@ -253,7 +259,7 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/mpeg, "
 		"mpegversion = (int) { 1, 2 }, "
 		"systemstream = (boolean) false, "
-	COMMON_VIDEO_CAPS "; ")
+		COMMON_VIDEO_CAPS "; ")
 );
 
 #define DEBUG_INIT(bla) \
@@ -276,6 +282,7 @@ static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self);
 typedef enum { DM7025, DM800, DM8000, DM500HD, DM800SE, DM7020HD } hardware_type_t;
 
 static hardware_type_t hwtype;
+static GstStaticPadTemplate *hwtemplate;
 
 static void
 gst_dvbvideosink_base_init (gpointer klass)
@@ -297,40 +304,60 @@ gst_dvbvideosink_base_init (gpointer klass)
 		{
 			if ( !strncasecmp(string, "DM7025", 6) ) {
 				hwtype = DM7025;
+				hwtemplate = &sink_factory_ati_xilleon;
 				GST_INFO ("model is DM7025... set ati xilleon caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_ati_xilleon));
 			} else if ( !strncasecmp(string, "DM500HD", 7) ) {
 				hwtype = DM500HD;
+				hwtemplate = &sink_factory_bcm7405;
 				GST_INFO ("model is DM500HD... set bcm7405 caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_bcm7405));
 			} else if ( !strncasecmp(string, "DM800SE", 7) ) {
 				hwtype = DM800SE;
+				hwtemplate = &sink_factory_bcm7405;
 				GST_INFO ("model is DM800SE... set bcm7405 caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_bcm7405));
 			} else if ( !strncasecmp(string, "DM7020HD", 8) ) {
 				hwtype = DM7020HD;
+				hwtemplate = &sink_factory_bcm7405;
 				GST_INFO ("model is DM7020HD... set bcm7405 caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_bcm7405));
 			} else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
+				hwtemplate = &sink_factory_bcm7400;
 				GST_INFO ("model is DM8000... set bcm7400 caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_bcm7400));
 			} else if ( !strncasecmp(string, "DM800", 5) ) {
 				hwtype = DM800;
+				hwtemplate = &sink_factory_bcm7401;
 				GST_INFO ("model is DM800 set bcm7401 caps");
-				gst_element_class_add_pad_template (element_class,
-					gst_static_pad_template_get (&sink_factory_bcm7401));
 			}
+			if (hwtemplate) {
+				gst_element_class_add_pad_template (element_class,
+					gst_static_pad_template_get (hwtemplate));
+			}
+
 		}
 		close(fd);
 	}
 
 	gst_element_class_set_details (element_class, &element_details);
+}
+
+static GstCaps *
+gst_dvbvideosink_get_caps (GstBaseSink *basesink)
+{
+//	GstDVBVideoSink *self = GST_DVBVIDEOSINK (basesink);
+	GstCaps *caps;
+//	gchar *strcaps;
+
+	if (hwtype != DM7020HD && hwtemplate == &sink_factory_bcm7405) {
+		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
+		gst_caps_remove_structure(caps, 7); // remove WMV
+	}
+	else
+		caps = gst_static_caps_get(&hwtemplate->static_caps);
+
+//	strcaps = gst_caps_to_string(caps);
+//	GST_INFO_OBJECT (self, "dynamic caps for model %d '%s'", hwtype, gst_caps_to_string(caps));
+//	g_free(strcaps);
+
+	return caps;
 }
 
 /* initialize the plugin's class */
@@ -350,6 +377,7 @@ gst_dvbvideosink_class_init (GstDVBVideoSinkClass *klass)
 	gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock);
 	gstbasesink_class->unlock_stop = GST_DEBUG_FUNCPTR (gst_dvbvideosink_unlock_stop);
 	gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_set_caps);
+	gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_dvbvideosink_get_caps);
 
 	element_class->change_state = GST_DEBUG_FUNCPTR (gst_dvbvideosink_change_state);
 
@@ -877,6 +905,10 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				if (self->codec_type != CT_MPEG1 && self->codec_type != CT_MPEG2 && (self->codec_type != CT_DIVX4 || data[3] == 0x00)) {
 					unsigned char *codec_data = GST_BUFFER_DATA (self->codec_data);
 					unsigned int codec_data_len = GST_BUFFER_SIZE (self->codec_data);
+					if (self->codec_type == CT_VC1) {
+						codec_data += 1;
+						codec_data_len -= 1;
+					}
 					if (self->codec_type == CT_DIVX311)
 						ASYNC_WRITE(codec_data, codec_data_len);
 					else {
@@ -947,6 +979,12 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				if (data[0] || data[1] || data[2] != 1) {
 					memcpy(pes_header+pes_header_len, "\x00\x00\x01", 3);
 					pes_header_len += 3;
+				}
+			}
+			else if (self->codec_type == CT_VC1 || self->codec_type == CT_VC1_SIMPLE_MAIN) {
+				if (data[0] || data[1] || data[2] != 1) {
+					memcpy(pes_header+pes_header_len, "\x00\x00\x01\x0d", 4);
+					pes_header_len += 4;
 				}
 			}
 			else if (self->codec_type == CT_DIVX311) {
@@ -1429,6 +1467,70 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				GST_ELEMENT_ERROR (self, STREAM, FORMAT, (NULL), ("unhandled divx version %i", divxversion));
 			break;
 		}
+	} else if (!strcmp (mimetype, "video/x-wmv")) {
+		guint32 fourcc=0;
+		const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
+		if (gst_structure_get_fourcc (structure, "format", &fourcc) ||
+		    gst_structure_get_fourcc (structure, "fourcc", &fourcc))
+		{
+			gint width, height;
+			if (GST_MAKE_FOURCC('W', 'V', 'C', '1') == fourcc)
+			{
+				streamtype = 16;  // VC-1
+				self->codec_type = CT_VC1;
+				GST_INFO_OBJECT (self, "MIMETYPE video/x-wmv(WVC1) VIDEO_SET_STREAMTYPE, 16");
+			}
+			else if (GST_MAKE_FOURCC('W', 'M', 'V', '3') == fourcc)
+			{
+				streamtype = 17; // VC1 Simple/Main
+				self->codec_type = CT_VC1_SIMPLE_MAIN;
+				gst_structure_get_int (structure, "height", &height);
+				gst_structure_get_int (structure, "width", &width);
+				GST_INFO_OBJECT (self, "MIMETYPE video/x-wmv(WMV3) VIDEO_SET_STREAMTYPE, 17");
+			}
+			else
+				GST_ERROR_OBJECT (self, "unsupported wmv codec %c%c%c%c", fourcc & 0xFF, (fourcc >> 8) & 0xFF, (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF);
+			if (codec_data) {
+				GST_INFO_OBJECT (self, "WMV have codec data..!");
+				if (streamtype == 17) {
+					GstBuffer *cd_data = gst_value_get_buffer (codec_data);
+					guint8 *data = GST_BUFFER_DATA(cd_data);
+					guint cd_len = GST_BUFFER_SIZE(cd_data);
+					if (cd_len > 4) {
+						GST_INFO_OBJECT(self, "stripped %d byte VC1-SM codec data.. to 4", cd_len);
+						cd_len=4;
+					}
+					if (cd_len == 4) {
+						guint8 brcm_vc1sm_sequence_header[] = {
+							0x00, 0x00, 0x01, 0x0F,
+							(width >> 8) & 0xFF, width&0xFF,
+							(height >> 8) & 0xFF, height&0xFF,
+							0x00, 0x00, 0x00, 0x00,
+							0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+						};
+						GstBuffer *dest = gst_buffer_new_and_alloc(sizeof(brcm_vc1sm_sequence_header));
+						memcpy(GST_BUFFER_DATA(dest), brcm_vc1sm_sequence_header, sizeof(brcm_vc1sm_sequence_header));
+						memcpy(GST_BUFFER_DATA(dest)+8, data, 4);
+						data[0] >>= 4;
+						if (data[0] != 4 && data[0] != 0)
+							GST_ERROR_OBJECT(self, "unsupported vc1-sm video compression format (profile %d)", data[0]);
+						self->codec_data = dest;
+					}
+					else {
+						GST_ERROR_OBJECT(self, "VC1-SM codec data has wrong size!!!");
+						streamtype = -1;
+					}
+				}
+				else {
+					self->codec_data = gst_value_get_buffer (codec_data);
+					gst_buffer_ref (self->codec_data);
+				}
+			}
+			else
+				GST_INFO_OBJECT(self, "no WMV codec data!");
+		}
+		else
+			GST_ERROR_OBJECT(self, "no WMV fourcc given!");
 	}
 	if (streamtype != -1) {
 		gint numerator, denominator;
