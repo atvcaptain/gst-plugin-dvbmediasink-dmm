@@ -615,7 +615,7 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 		gboolean update;
 		gdouble rate, applied_rate;
 		gint64 cur, stop, time;
-		int skip = 0, repeat = 0, ret;
+		int skip = 0, repeat = 0;
 		gst_event_parse_new_segment_full (event, &update, &rate, &applied_rate,	&fmt, &cur, &stop, &time);
 		GST_DEBUG_OBJECT (self, "GST_EVENT_NEWSEGMENT rate=%f applied_rate=%f\n", rate, applied_rate);
 		
@@ -626,8 +626,8 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 			else if ( rate < 1 )
 				repeat = 1.0/rate;
 
-			ret = ioctl(self->fd, VIDEO_SLOWMOTION, repeat);
-			ret = ioctl(self->fd, VIDEO_FAST_FORWARD, skip);
+			ret = ioctl(self->fd, VIDEO_SLOWMOTION, repeat) < 0 ? FALSE : TRUE;
+			ret = ioctl(self->fd, VIDEO_FAST_FORWARD, skip) < 0 ? FALSE : TRUE;
 // 			gst_segment_set_newsegment_full (&dec->segment, update, rate, applied_rate, dformat, cur, stop, time);
 		}
 		break;
@@ -804,7 +804,7 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 			if (data[pos++] != 1)
 				continue;
 			if ((data[pos++] & 0xF0) == 0x20) { // we need time_inc_res
-				gboolean low_delay=FALSE;
+				__attribute__((unused)) gboolean low_delay = FALSE;
 				unsigned int ver_id = 1, shape=0, time_inc_res=0, tmp=0;
 				struct bitstream bit;
 				bitstream_init(&bit, data+pos, 0);
