@@ -25,10 +25,12 @@ AC_SUBST(ACLOCAL_AMFLAGS, "-I m4")
 
 AM_CONFIG_HEADER(config.h)
 
+AC_USE_SYSTEM_EXTENSIONS
+AC_SYS_LARGEFILE
+
 dnl check for tools
 AC_PROG_CC
 AC_PROG_LIBTOOL
-
 
 dnl decide on error flags
 AS_COMPILER_FLAG(-Wall, GST_WALL="yes", GST_WALL="no")
