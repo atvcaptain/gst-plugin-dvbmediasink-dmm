@@ -277,7 +277,7 @@ gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
 //	gchar *strcaps;
 	GstCaps *caps;
 
-	if (hwtype != DM7020HD && hwtemplate == &sink_factory_broadcom_dts) {
+	if (hwtype == DM8000 && hwtemplate == &sink_factory_broadcom_dts) {
 		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
 		gst_caps_remove_structure(caps, 11); // remove WMA!!
 	}
