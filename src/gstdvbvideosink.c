@@ -203,10 +203,6 @@ GST_STATIC_PAD_TEMPLATE (
 		MPEG4V2_LIMITED_CAPS "; ")
 );
 
-/* take care when you add or remove caps here!!!
- * position 7 must be WMV !!!
- * see gst_dvbvideosink_get_caps
- */
 static GstStaticPadTemplate sink_factory_bcm7405 =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -346,12 +342,7 @@ gst_dvbvideosink_get_caps (GstBaseSink *basesink)
 	GstCaps *caps;
 //	gchar *strcaps;
 
-	if (hwtype != DM7020HD && hwtemplate == &sink_factory_bcm7405) {
-		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
-		gst_caps_remove_structure(caps, 7); // remove WMV
-	}
-	else
-		caps = gst_static_caps_get(&hwtemplate->static_caps);
+	caps = gst_static_caps_get(&hwtemplate->static_caps);
 
 //	strcaps = gst_caps_to_string(caps);
 //	GST_INFO_OBJECT (self, "dynamic caps for model %d '%s'", hwtype, gst_caps_to_string(caps));
