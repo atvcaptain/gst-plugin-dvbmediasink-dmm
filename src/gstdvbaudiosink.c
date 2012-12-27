@@ -1078,17 +1078,6 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	pes_header[2] = 1;
 	pes_header[3] = 0xC0;
 
-	if (self->bypass == 2) {  // dts
-		int pos=0;
-		while((pos+3) < size) {
-			if (!strcmp((char*)(data+pos), "\x64\x58\x20\x25")) {  // is DTS-HD ?
-				size = pos;
-				break;
-			}
-			++pos;
-		}
-	}
-
 	if (self->aac_adts_header_valid)
 		size += 7;
 	else if (self->temp_buffer)
