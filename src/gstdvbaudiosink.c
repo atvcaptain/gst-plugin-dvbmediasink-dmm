@@ -134,12 +134,9 @@ GST_STATIC_PAD_TEMPLATE (
 	GST_PAD_ALWAYS,
 	GST_STATIC_CAPS ("audio/mpeg, "
 		"mpegversion = (int) 1, "
-		"layer = (int) [ 1, 2 ], "
-		"framed = (boolean) true; "
-		"audio/x-ac3, "
-		"framed = (boolean) true; "
-		"audio/x-private1-ac3, "
-		"framed = (boolean) true")
+		"layer = (int) [ 1, 2 ]; "
+		"audio/x-ac3; "
+		"audio/x-private1-ac3")
 );
 
 /* take care when you add or remove caps here!!!
@@ -157,20 +154,13 @@ GST_STATIC_PAD_TEMPLATE (
 		X_RAW_INT(24,24)
 		X_RAW_INT(32,24)
 		X_RAW_INT(32,32)
-		"audio/mpeg, "
-		"framed = (boolean) true; "
-		"audio/x-ac3, "
-		"framed = (boolean) true; "
-		"audio/x-private1-ac3, "
-		"framed = (boolean) true; "
-		"audio/x-dts, "
-		"framed = (boolean) true; "
-		"audio/x-private1-dts, "
-		"framed = (boolean) true; "
-		"audio/x-private1-lpcm, "
-		"framed = (boolean) true; "
-		"audio/x-wma, "
-		"framed = (boolean) true;")
+		"audio/mpeg; "
+		"audio/x-ac3; "
+		"audio/x-private1-ac3; "
+		"audio/x-dts; "
+		"audio/x-private1-dts; "
+		"audio/x-private1-lpcm; "
+		"audio/x-wma")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom =
@@ -178,12 +168,9 @@ GST_STATIC_PAD_TEMPLATE (
 	"sink",
 	GST_PAD_SINK,
 	GST_PAD_ALWAYS,
-	GST_STATIC_CAPS ("audio/mpeg, "
-		"framed = (boolean) true; "
-		"audio/x-ac3, "
-		"framed = (boolean) true; "
-		"audio/x-private1-ac3, "
-		"framed = (boolean) true")
+	GST_STATIC_CAPS ("audio/mpeg; "
+		"audio/x-ac3; "
+		"audio/x-private1-ac3")
 );
 
 #define DEBUG_INIT(bla) \
@@ -291,6 +278,59 @@ gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
 	return caps;
 }
 
+static gboolean
+gst_dvbaudiosink_acceptcaps (GstPad * pad, GstCaps * caps)
+{
+	GstDVBAudioSink *self = GST_DVBAUDIOSINK (gst_pad_get_parent_element (pad));
+	gboolean ret = FALSE;
+
+	GstCaps *pad_caps = gst_pad_get_caps_reffed (pad);
+	if (pad_caps) {
+		ret = gst_caps_can_intersect (pad_caps, caps);
+		gst_caps_unref (pad_caps);
+		if (!ret)
+			goto done;
+	}
+
+	/* If we've not got fixed caps, creating a stream might fail, so let's just
+	 * return from here with default acceptcaps behaviour */
+	if (!gst_caps_is_fixed (caps))
+		goto done;
+	else
+	{
+		GstStructure *st = gst_caps_get_structure (caps, 0);
+		const char *type = gst_structure_get_name (st);
+
+		if (!strcmp(type, "audio/mpeg") ||
+		    !strcmp(type, "audio/x-ac3") ||
+		    !strcmp(type, "audio/x-private1-ac3") ||
+//		    !strcmp(type, "audio/x-private1-lpcm") ||
+//		    !strcmp(type, "audio/x-wma") ||
+//		    !strcmp(type, "audio/x-raw-int") ||
+		    !strcmp(type, "audio/x-dts") ||
+		    !strcmp(type, "audio/x-private1-dts"))
+		{
+			gboolean framed = FALSE, parsed = FALSE;
+			gst_structure_get_boolean (st, "framed", &framed);
+			gst_structure_get_boolean (st, "parsed", &parsed);
+
+			GST_INFO_OBJECT(self, "framed %d, parsed %d", framed, parsed);
+
+			if ((!framed && !parsed)) {
+				ret = FALSE;
+				goto done;
+			}
+		}
+	}
+
+	ret = TRUE;
+
+done:
+	gst_object_unref (self);
+
+	return ret;
+}
+
 static int
 gst_dvbaudiosink_async_write(GstDVBAudioSink *self, unsigned char *data, unsigned int len);
 
@@ -355,6 +395,9 @@ gst_dvbaudiosink_init (GstDVBAudioSink *klass, GstDVBAudioSinkClass * gclass)
 
 	gst_base_sink_set_sync (GST_BASE_SINK(klass), FALSE);
 	gst_base_sink_set_async_enabled (GST_BASE_SINK(klass), TRUE);
+
+	gst_pad_set_acceptcaps_function (GST_BASE_SINK (klass)->sinkpad,
+		GST_DEBUG_FUNCPTR (gst_dvbaudiosink_acceptcaps));
 }
 
 static void
