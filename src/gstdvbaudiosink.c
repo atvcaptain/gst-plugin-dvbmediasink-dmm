@@ -303,12 +303,12 @@ gst_dvbaudiosink_acceptcaps (GstPad * pad, GstCaps * caps)
 
 		if (!strcmp(type, "audio/mpeg") ||
 		    !strcmp(type, "audio/x-ac3") ||
-		    !strcmp(type, "audio/x-private1-ac3") ||
+//		    !strcmp(type, "audio/x-private1-ac3") ||
 //		    !strcmp(type, "audio/x-private1-lpcm") ||
 //		    !strcmp(type, "audio/x-wma") ||
 //		    !strcmp(type, "audio/x-raw-int") ||
-		    !strcmp(type, "audio/x-dts") ||
-		    !strcmp(type, "audio/x-private1-dts"))
+//		    !strcmp(type, "audio/x-private1-dts") ||
+		    !strcmp(type, "audio/x-dts"))
 		{
 			gboolean framed = FALSE, parsed = FALSE;
 			gst_structure_get_boolean (st, "framed", &framed);
