@@ -47,8 +47,6 @@
 #ifndef __GST_DVBVIDEOSINK_H__
 #define __GST_DVBVIDEOSINK_H__
 
-#define PACK_UNPACKED_XVID_DIVX5_BITSTREAM
-
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
 
@@ -93,11 +91,9 @@ struct _GstDVBVideoSink
 	GstBuffer *codec_data;
 	t_codec_type codec_type;
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	/* data needed to pack bitstream (divx5 / xvid) */
 	gint num_non_keyframes, must_pack_bitstream, time_inc_bits, time_inc;
 	GstBuffer *prev_frame;
-#endif
 
 	char saved_fallback_framerate[16];
 
@@ -107,6 +103,27 @@ struct _GstDVBVideoSink
 	int no_write;
 
 	queue_entry_t *queue;
+
+	// VC1 stuff....
+
+	int no_header;
+
+	int framerate;  // current framerate
+
+	unsigned char ucPrevFramePicType;
+
+	// Sequence header variables
+	unsigned char ucVC1_PULLDOWN;
+	unsigned char ucVC1_INTERLACE;
+	unsigned char ucVC1_TFCNTRFLAG ;
+	unsigned char ucVC1_FINTERPFLAG;
+	unsigned char ucVC1_PSF;
+	unsigned char ucVC1_HRD_PARAM_FLAG;
+	unsigned char ucVC1_HRD_NUM_LEAKY_BUCKETS;
+
+	// Entry Point header variables
+	unsigned char ucVC1_PANSCAN_FLAG;
+	unsigned char ucVC1_REFDIST_FLAG;
 };
 
 struct _GstDVBVideoSinkClass 

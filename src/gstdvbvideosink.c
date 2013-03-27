@@ -77,7 +77,6 @@
 #define VIDEO_GET_PTS              _IOR('o', 57, gint64)
 #endif
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 struct bitstream
 {
 	guint8 *data;
@@ -132,7 +131,16 @@ void bitstream_put(struct bitstream *bit, unsigned long val, int bits)
 		--bits;
 	}
 }
-#endif
+
+static unsigned int Vc1ParseSeqHeader( GstDVBVideoSink *self, struct bitstream *bit );
+static unsigned int Vc1ParseEntryPointHeader( GstDVBVideoSink *self, struct bitstream *bit );
+static unsigned char Vc1GetFrameType( GstDVBVideoSink *self, struct bitstream *bit );
+static unsigned char Vc1GetBFractionVal( GstDVBVideoSink *self, struct bitstream *bit );
+static unsigned char Vc1GetNrOfFramesFromBFractionVal( unsigned char ucBFVal );
+static unsigned char Vc1HandleStreamBuffer( GstDVBVideoSink *self, unsigned char *data, int flags );
+
+#define cVC1NoBufferDataAvailable	0
+#define cVC1BufferDataAvailable		1
 
 /* We add a control socket as in fdsrc to make it shutdown quickly when it's blocking on the fd.
  * Poll is used to determine when the fd is ready for use. When the element state is changed,
@@ -399,14 +407,25 @@ gst_dvbvideosink_init (GstDVBVideoSink *klass, GstDVBVideoSinkClass * gclass)
 	klass->h264_nal_len_size = 0;
 	klass->codec_data = NULL;
 	klass->codec_type = CT_H264;
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
+
 	klass->must_pack_bitstream = 0;
 	klass->num_non_keyframes = 0;
 	klass->prev_frame = NULL;
-#endif
+
+	klass->ucPrevFramePicType = 0;
 	klass->no_write = 0;
 	klass->queue = NULL;
 	klass->fd = -1;
+
+	klass->ucVC1_PULLDOWN = 0;
+	klass->ucVC1_INTERLACE = 0;
+	klass->ucVC1_TFCNTRFLAG = 0;
+	klass->ucVC1_FINTERPFLAG = 0;
+	klass->ucVC1_PSF = 0;
+	klass->ucVC1_HRD_PARAM_FLAG = 0;
+	klass->ucVC1_HRD_NUM_LEAKY_BUCKETS = 0;
+	klass->ucVC1_PANSCAN_FLAG = 0;
+	klass->ucVC1_REFDIST_FLAG = 0;
 
 	if (f) {
 		fgets(klass->saved_fallback_framerate, 16, f);
@@ -699,6 +718,8 @@ loop_start:
 					msg = gst_message_new_element (GST_OBJECT (sink), s);
 					gst_element_post_message (GST_ELEMENT (sink), msg);
 				} else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED) {
+					self->framerate = evt.u.frame_rate;
+					GST_INFO_OBJECT(self, "decoder framerate %d", self->framerate);
 					s = gst_structure_new ("eventFrameRateChanged",
 						"frame_rate", G_TYPE_INT, evt.u.frame_rate, NULL);
 					msg = gst_message_new_element (GST_OBJECT (sink), s);
@@ -768,10 +789,8 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	unsigned int payload_len=0;
 //	int i=0;
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	gboolean commit_prev_frame_data = FALSE,
 			cache_prev_frame = FALSE;
-#endif
 
 //	for (;i < (data_len > 0xF ? 0xF : data_len); ++i)
 //		printf("%02x ", data[i]);
@@ -781,7 +800,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	if (self->fd < 0)
 		return GST_FLOW_OK;
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->must_pack_bitstream == 1) {
 		cache_prev_frame = TRUE;
 		unsigned int pos = 0;
@@ -859,7 +877,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 //				printf("no pack needed\n");
 		}
 	}
-#endif
 
 	pes_header[0] = 0;
 	pes_header[1] = 0;
@@ -885,6 +902,12 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 		if (self->codec_data) {
 			switch (self->codec_type) { // we must always resend the codec data before every seq header on dm8k
+			case CT_VC1:
+				if (self->no_header && self->ucPrevFramePicType == 6) {  // I-Frame...
+					GST_INFO_OBJECT(self, "send seq header");
+					self->must_send_header = 1;
+				}
+				break;
 			case CT_MPEG4_PART2:
 			case CT_DIVX4:
 				if (data[0] == 0xb3 || !memcmp(data, "\x00\x00\x01\xb3", 4))
@@ -973,9 +996,34 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				}
 			}
 			else if (self->codec_type == CT_VC1 || self->codec_type == CT_VC1_SIMPLE_MAIN) {
+				int skip_header_check;
+
 				if (data[0] || data[1] || data[2] != 1) {
 					memcpy(pes_header+pes_header_len, "\x00\x00\x01\x0d", 4);
 					pes_header_len += 4;
+					skip_header_check = 1;
+				}
+				else
+					skip_header_check = 0;
+
+				self->no_header = skip_header_check;
+
+				if (self->codec_type == CT_VC1) {
+					unsigned char ucRetVal = Vc1HandleStreamBuffer( self, data, skip_header_check );
+					if ( ucRetVal != cVC1NoBufferDataAvailable ) {
+						data_len = GST_BUFFER_SIZE(self->prev_frame);
+						data = GST_BUFFER_DATA(self->prev_frame);
+					}
+					else {
+						GST_DEBUG_OBJECT(self, "first buffer!");
+
+						gst_buffer_ref(buffer);
+						self->prev_frame = buffer;
+
+						return GST_FLOW_OK;
+					}
+
+					cache_prev_frame = TRUE;
 				}
 			}
 			else if (self->codec_type == CT_DIVX311) {
@@ -994,7 +1042,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		pes_header_len = 9;
 	}
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->must_pack_bitstream == 1) {
 		unsigned int pos = 0;
 		gboolean i_frame = FALSE;
@@ -1099,14 +1146,12 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 		}
 //		printf("\n");
 	}
-#endif
 
 	payload_len = data_len + pes_header_len - 6;
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame && self->prev_frame != buffer) {
 		unsigned long long pts = GST_BUFFER_TIMESTAMP(self->prev_frame) * 9LL / 100000 /* convert ns to 90kHz */;
-//		printf("use prev timestamp: %08llx\n", (long long)GST_BUFFER_TIMESTAMP(self->prev_frame));
+		GST_DEBUG_OBJECT(self, "use prev timestamp: %08llx", (long long)GST_BUFFER_TIMESTAMP(self->prev_frame));
 
 		pes_header[9] =  0x21 | ((pts >> 29) & 0xE);
 		pes_header[10] = pts >> 22;
@@ -1117,7 +1162,6 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 
 	if (commit_prev_frame_data)
 		payload_len += GST_BUFFER_SIZE (self->prev_frame);
-#endif
 
 	if (self->codec_type == CT_MPEG2 || self->codec_type == CT_MPEG1) {
 		if (!self->codec_data && data_len > 3 && !data[0] && !data[1] && data[2] == 1 && data[3] == 0xb3) { // sequence header?
@@ -1225,25 +1269,24 @@ leave:
 
 	ASYNC_WRITE(pes_header, pes_header_len);
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (commit_prev_frame_data) {
-//		printf("commit prev frame data\n");
+		GST_DEBUG_OBJECT(self, "commit prev frame data");
 		ASYNC_WRITE(GST_BUFFER_DATA (self->prev_frame), GST_BUFFER_SIZE (self->prev_frame));
 	}
 
+	ASYNC_WRITE(data, data_len);
+
 	if (self->prev_frame && self->prev_frame != buffer) {
-//		printf("unref prev_frame buffer\n");
+		GST_DEBUG_OBJECT(self, "unref prev_frame buffer");
 		gst_buffer_unref(self->prev_frame);
 		self->prev_frame = NULL;
 	}
 
 	if (cache_prev_frame) {
-//		printf("cache prev frame\n");
+		GST_DEBUG_OBJECT(self, "cache prev frame");
 		gst_buffer_ref(buffer);
 		self->prev_frame = buffer;
 	}
-#endif
-	ASYNC_WRITE(data, data_len);
 
 	return GST_FLOW_OK;
 poll_error:
@@ -1272,6 +1315,8 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	GstStructure *structure = gst_caps_get_structure (caps, 0);
 	const char *mimetype = gst_structure_get_name (structure);
 	int streamtype = -1;
+	self->framerate = -1;
+	self->no_header = 0;
 
 	if (!strcmp (mimetype, "video/mpeg")) {
 		gint mpegversion;
@@ -1395,9 +1440,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		GST_INFO_OBJECT (self, "MIMETYPE video/x-h263 VIDEO_SET_STREAMTYPE, 2");
 	} else if (!strcmp (mimetype, "video/x-xvid")) {
 		streamtype = 10;
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 		self->must_pack_bitstream = 1;
-#endif
 		GST_INFO_OBJECT (self, "MIMETYPE video/x-xvid -> VIDEO_SET_STREAMTYPE, 10");
 	} else if (!strcmp (mimetype, "video/x-divx") || !strcmp (mimetype, "video/x-msmpeg")) {
 		gint divxversion = -1;
@@ -1449,9 +1492,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 			case 6:
 			case 5:
 				streamtype = 15;
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 				self->must_pack_bitstream = 1;
-#endif
 				GST_INFO_OBJECT (self, "MIMETYPE video/x-divx vers. 5 -> VIDEO_SET_STREAMTYPE, 15");
 			break;
 			default:
@@ -1515,6 +1556,8 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 				else {
 					self->codec_data = gst_value_get_buffer (codec_data);
 					gst_buffer_ref (self->codec_data);
+
+					Vc1HandleStreamBuffer( self, GST_BUFFER_DATA(self->codec_data)+1, 2 );
 				}
 			}
 			else
@@ -1525,7 +1568,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	}
 	if (streamtype != -1) {
 		gint numerator, denominator;
-		if (gst_structure_get_fraction (structure, "framerate", &numerator, &denominator)) {
+		if (self->framerate == -1 && gst_structure_get_fraction (structure, "framerate", &numerator, &denominator)) {
 			FILE *f = fopen("/proc/stb/vmpeg/0/fallback_framerate", "w");
 			if (f) {
 				int valid_framerates[] = { 23976, 24000, 25000, 29970, 30000, 50000, 59940, 60000 };
@@ -1540,10 +1583,17 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 						best = i;
 					}
 				}
-				fprintf(f, "%d", valid_framerates[best]);
+				self->framerate = valid_framerates[best];
+
+				GST_INFO_OBJECT(self, "framerate %d", self->framerate);
+
+				fprintf(f, "%d", self->framerate);
 				fclose(f);
 			}
 		}
+		else if (self->framerate == -1)
+			GST_INFO_OBJECT(self, "no framerate given!");
+
 		if (self->dec_running) {
 			ioctl(self->fd, VIDEO_STOP, 0);
 			self->dec_running = FALSE;
@@ -1559,7 +1609,8 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	return TRUE;
 }
 
-static int readMpegProc(char *str, int decoder)
+static int
+readMpegProc(char *str, int decoder)
 {
 	int val = -1;
 	char tmp[64];
@@ -1573,7 +1624,8 @@ static int readMpegProc(char *str, int decoder)
 	return val;
 }
 
-static int readApiSize(int fd, int *xres, int *yres, int *aspect)
+static int
+readApiSize(int fd, int *xres, int *yres, int *aspect)
 {
 	video_size_t size;
 	if (!ioctl(fd, VIDEO_GET_SIZE, &size))
@@ -1586,7 +1638,8 @@ static int readApiSize(int fd, int *xres, int *yres, int *aspect)
 	return -1;
 }
 
-static int readApiFrameRate(int fd, int *framerate)
+static int
+readApiFrameRate(int fd, int *framerate)
 {
 	unsigned int frate;
 	if (!ioctl(fd, VIDEO_GET_FRAME_RATE, &frate))
@@ -1651,10 +1704,8 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 	if (self->h264_buffer)
 		gst_buffer_unref(self->h264_buffer);
 
-#ifdef PACK_UNPACKED_XVID_DIVX5_BITSTREAM
 	if (self->prev_frame)
 		gst_buffer_unref(self->prev_frame);
-#endif
 
 	while(self->queue)
 		queue_pop(&self->queue);
@@ -1706,6 +1757,8 @@ gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition)
 				aspect = aspect == 0 ? 2 : 3; // dvb api to etsi
 			if (readApiFrameRate(self->fd, &framerate) == -1)
 				framerate = readMpegProc("framerate", 0);
+
+			self->framerate = framerate;
 
 			s = gst_structure_new ("eventSizeAvail",
 				"aspect_ratio", G_TYPE_INT, aspect == 0 ? 2 : 3,
@@ -1791,3 +1844,426 @@ GST_PLUGIN_DEFINE (
 	"GStreamer",
 	"http://gstreamer.net/"
 )
+
+static unsigned int
+Vc1ParseSeqHeader( GstDVBVideoSink *self, struct bitstream *bit )
+{
+	unsigned char n;
+	long uiStartAddr = (long)&(bit->data[0]);
+	long uiStopAddr = 0;
+
+	// skip first 5 bytes (PROFILE,LEVEL,COLORDIFF_FORMAT,FRMRTQ_POSTPROC,BITRTQ_POSTPROC,POSTPROCFLAG,MAX_CODED_WIDTH,MAX_CODED_HEIGHT)
+	bitstream_get( bit, 32 );
+	bitstream_get( bit, 8 );
+	self->ucVC1_PULLDOWN = (unsigned char)bitstream_get( bit, 1 );
+	self->ucVC1_INTERLACE = (unsigned char)bitstream_get( bit, 1 );
+	self->ucVC1_TFCNTRFLAG = (unsigned char)bitstream_get( bit, 1 );
+	self->ucVC1_FINTERPFLAG = (unsigned char)bitstream_get( bit, 1 );
+	// skip 1 bit (RESERVED)
+	bitstream_get( bit, 1 );
+	self->ucVC1_PSF = (unsigned char)bitstream_get( bit, 1 );
+
+	if ( bitstream_get( bit, 1 ) == 1 ) {
+		// DISPLAY_EXT == 1
+
+		// skip 28 bits (DISP_HORIZ_SIZE,DISP_VERT_SIZE)
+		bitstream_get( bit, 28 );
+
+		if ( bitstream_get( bit, 1 ) == 1 ) {
+			// ASPECT_RATIO_FLAG == 1
+			if ( bitstream_get( bit, 4 ) == 15 )
+			{
+				// ASPECT_RATIO == '15'
+
+				// skip 16 bits (ASPECT_HORIZ_SIZE,ASPECT_VERT_SIZE)
+				bitstream_get( bit, 16 );
+			}
+		}
+
+		if ( bitstream_get( bit, 1 ) == 1 ) {
+			int framerate = -1;
+			// FRAMERATE_FLAG == 1
+			if ( bitstream_get( bit, 1 ) == 0 ) {
+				// FRAMERATEIND == 0
+				int frameratenr = bitstream_get( bit, 8 );
+				int frameratedr = bitstream_get( bit, 4 );
+
+				GST_DEBUG_OBJECT(self, "VC1 frameratenr %d, frameratedr %d", frameratenr, frameratedr);
+
+				switch (frameratenr) {
+					case 1: framerate = 24000; break;
+					case 2: framerate = 25000; break;
+					case 3: framerate = 30000; break;
+					case 4: framerate = 50000; break;
+					case 5: framerate = 60000; break;
+					case 6: framerate = 48000; break;
+					case 7: framerate = 72000; break;
+					default:
+						GST_INFO_OBJECT(self, "forbidden VC1 frameratenr %d", frameratenr);
+						break;
+				}
+				if (framerate != -1) {
+					switch (frameratedr) {
+					case 1: break;
+					case 2: framerate *= 1000;
+						framerate /= 1001;
+						break;
+					default:
+						GST_INFO_OBJECT(self, "forbidden VC1 frameratedr %d", frameratedr);
+						break;
+					}
+				}
+			}
+			else {
+				// FRAMERATEIND == 1
+				int framerateexp = bitstream_get( bit, 16 );
+
+				GST_DEBUG_OBJECT(self, "VC1 framerateexp %d", framerateexp);
+
+				framerate = (framerateexp * 1000) / 32;
+			}
+
+			if (framerate != -1) {
+				GST_INFO_OBJECT(self, "VC1 seq header framerate %d", framerate);
+
+				self->framerate = framerate;
+			}
+		}
+
+		if ( bitstream_get( bit, 1 ) == 1 ) {
+			// COLOR_FORMAT_FLAG ==1
+
+			// skip 24 bits (COLOR_PRIM,TRANSFER_CHAR,MATRIX_COEF)
+			bitstream_get( bit, 24 );
+		}
+	}
+
+	self->ucVC1_HRD_PARAM_FLAG = (unsigned char)bitstream_get( bit, 1 );
+
+	if ( self->ucVC1_HRD_PARAM_FLAG == 1 ) {
+		// ucVC1_HRD_PARAM_FLAG == 1
+		self->ucVC1_HRD_NUM_LEAKY_BUCKETS = (unsigned char)bitstream_get( bit, 5 );
+
+		// skip 8 bits (BIT_RATE_EXPONENT,BUFFER_SIZE_EXPONENT)
+		bitstream_get( bit, 8 );
+
+		for ( n = 1; n <= self->ucVC1_HRD_NUM_LEAKY_BUCKETS; n++ ) {
+			// skip 32 bits (HRD_RATE[n],HRD_BUFFER[n])
+			bitstream_get( bit, 32 );
+		}
+	}
+
+	uiStopAddr = (long)&(bit->data[0]);
+	return (unsigned int)(uiStopAddr - uiStartAddr + 1);
+}
+
+static unsigned int
+Vc1ParseEntryPointHeader( GstDVBVideoSink *self, struct bitstream *bit )
+{
+	unsigned char n, ucEXTENDED_MV;
+	long uiStartAddr = (long)&(bit->data[0]);
+	long uiStopAddr = 0;
+
+	// skip the first two bits (BROKEN_LINK,CLOSED_ENTRY)
+	bitstream_get( bit, 2 );
+	self->ucVC1_PANSCAN_FLAG = (unsigned char)bitstream_get( bit, 1 );
+	self->ucVC1_REFDIST_FLAG = (unsigned char)bitstream_get( bit, 1 );
+
+	// skip 2 bits (LOOPFILTER,FASTUVMC)
+	bitstream_get( bit, 2 );
+
+	ucEXTENDED_MV = (unsigned char)bitstream_get( bit, 1 );
+
+	// skip 6 bits (DQUANT,VSTRANSFORM,OVERLAP,QUANTIZER)
+	bitstream_get( bit, 6 );
+
+	if ( self->ucVC1_HRD_PARAM_FLAG == 1 ) {
+		for ( n = 1; n <= self->ucVC1_HRD_NUM_LEAKY_BUCKETS; n++ ) {
+			// skip 8 bits (HRD_FULL[n])
+			bitstream_get( bit, 8 );
+		}
+	}
+
+	if ( bitstream_get( bit, 1 ) == 1 ) {
+		// CODED_SIZE_FLAG == 1
+
+		// skip 24 bits (CODED_WIDTH,CODED_HEIGHT)
+		bitstream_get( bit, 24 );
+	}
+
+	if ( ucEXTENDED_MV == 1 ) {
+		// skip 1 bit (EXTENDED_DMV)
+		bitstream_get( bit, 1 );
+	}
+
+	if ( bitstream_get( bit, 1 ) == 1 ) {
+		// RANGE_MAPY_FLAG == 1
+
+		// skip 3 bits (RANGE_MAPY)
+		bitstream_get( bit, 3 );
+	}
+
+	if ( bitstream_get( bit, 1 ) == 1 ) {
+		// RANGE_MAPUV_FLAG == 1
+
+		// skip 3 bits (RANGE_MAPUV)
+		bitstream_get( bit, 3 );
+	}
+
+	uiStopAddr = (long)&(bit->data[0]);
+
+	return (unsigned int)(uiStopAddr - uiStartAddr + 1);
+}
+
+static unsigned char
+Vc1GetFrameType( GstDVBVideoSink *self, struct bitstream *bit )
+{
+	unsigned char ucRetVal = 0;
+
+	if ( self->ucVC1_INTERLACE == 1 ) {
+		// determine FCM
+		if ( bitstream_get( bit, 1 ) == 1 ) {
+			// Frame- or Field-Interlace Coding Mode -> we have to skip a further bit
+			bitstream_get( bit, 1 );
+		}
+		else {
+			// Progressive Frame Coding Mode -> no need to consume a further bit
+		}
+	}
+
+	if ( bitstream_get( bit, 1 ) == 0 ) {
+		// P-Frame detected
+		ucRetVal = 0;
+	}
+	else if ( bitstream_get( bit, 1 ) == 0 ) {
+		// B-Frame detected
+		ucRetVal = 2;
+	}
+	else if ( bitstream_get( bit, 1 ) == 0 ) {
+		// I-Frame detected
+		ucRetVal = 6;
+	}
+	else if ( bitstream_get( bit, 1 ) == 0 ) {
+		// BI-Frame detected
+		ucRetVal = 14;
+	}
+	else {
+		// Skipped-Frame detected
+		ucRetVal = 15;
+	}
+
+	return ucRetVal;
+}
+
+static unsigned char
+Vc1GetBFractionVal( GstDVBVideoSink *self, struct bitstream *bit )
+{
+	unsigned char ucRetVal = 0;
+	unsigned char ucNumberOfPanScanWindows = 0;
+	unsigned char ucRFF = 0;
+	unsigned char ucRPTFRM = 0;
+	unsigned char ucTmpVar = 0;
+	unsigned char i;
+
+	if ( self->ucVC1_TFCNTRFLAG == 1 ) {
+		// skip the first 8 bit (TFCNTR)
+		bitstream_get( bit, 8 );
+	}
+
+	if ( self->ucVC1_PULLDOWN == 1 ) {
+		if ( self->ucVC1_INTERLACE == 0 || self->ucVC1_PSF == 1 ) {
+			ucRPTFRM = (unsigned char)bitstream_get( bit, 2 );
+		}
+		else {
+			// skip 1 bit (TFF)
+			bitstream_get( bit, 1 );
+			ucRFF = (unsigned char)bitstream_get( bit, 1 );
+		}
+	}
+
+	if ( self->ucVC1_PANSCAN_FLAG == 1 ) {
+		if ( bitstream_get( bit, 2 ) != 0 ) {
+			// PS_PRESENT
+			if ( self->ucVC1_INTERLACE == 1 && self->ucVC1_PSF == 0 ) {
+				if ( self->ucVC1_PULLDOWN == 1 ) {
+					ucNumberOfPanScanWindows = 2 + ucRFF;
+				}
+				else {
+					ucNumberOfPanScanWindows = 2;
+				}
+			}
+			else {
+				if ( self->ucVC1_PULLDOWN == 1 ) {
+					ucNumberOfPanScanWindows = 1 + ucRPTFRM;
+				}
+				else {
+					ucNumberOfPanScanWindows = 1;
+				}
+			}
+			for ( i = 0; i < ucNumberOfPanScanWindows; i++ ) {
+				// skip 8 bytes (PS_HOFFSET,PS_VOFFSET,PS_WIDTH,PS_HEIGHT)
+				bitstream_get( bit, 32 );
+				bitstream_get( bit, 32 );
+			}
+		}
+	}
+
+	// skip 1 bit (RNDCTRL)
+	bitstream_get( bit, 1 );
+
+	if ( self->ucVC1_INTERLACE == 1 ) {
+		// skip 1 bit (UVSAMP)
+		bitstream_get( bit, 1 );
+	}
+
+	if ( self->ucVC1_FINTERPFLAG == 1 ) {
+		// skip 1 bit (INTERPFRM)
+		bitstream_get( bit, 1 );
+	}
+
+	ucTmpVar = (unsigned char)bitstream_get( bit, 3 );
+	ucRetVal = ucTmpVar;
+
+	if ( ucTmpVar > 6 ) {
+		ucRetVal <<= 4;
+		ucTmpVar = (unsigned char)bitstream_get( bit, 4 );
+		ucRetVal |= ucTmpVar;
+	}
+
+	return ucRetVal;
+}
+
+static unsigned char
+Vc1GetNrOfFramesFromBFractionVal( unsigned char ucBFVal )
+{
+	unsigned char ucRetVal;
+
+	switch( ucBFVal ) {
+		case 0:
+			//printf("(1/2)\n");
+			ucRetVal = 1;
+			break;
+		case 1:
+			//printf("(1/3)\n");
+			ucRetVal = 2;
+			break;
+		case 3:
+			//printf("(1/4)\n");
+			ucRetVal = 3;
+			break;
+		case 5:
+			//printf("(1/5)\n");
+			ucRetVal = 4;
+			break;
+		case 0x72:
+			//printf("(1/6)\n");
+			ucRetVal = 5;
+			break;
+		case 0x74:
+			//printf("(1/7)\n");
+			ucRetVal = 6;
+			break;
+		case 0x7A:
+			//printf("(1/8)\n");
+			ucRetVal = 7;
+			break;
+		default:
+			ucRetVal = 0;
+			//printf("ucBFVal = %d\n", ucBFVal);
+			break;
+	}
+
+	return ucRetVal;
+}
+
+static unsigned char
+Vc1HandleStreamBuffer( GstDVBVideoSink *self, unsigned char *data, int flags )
+{
+	unsigned char ucPType, ucRetVal = cVC1BufferDataAvailable;
+	unsigned int i = -1;
+
+	if (flags & 1)
+		goto parse_frame_header;
+
+	i = 0;
+
+	if ( ((data[i] == 0) && (data[i+1] == 0) && (data[i+2] == 1)) ) {
+
+		i += 3;
+
+		if ( data[i] == 0x0F ) {
+			// Sequence header
+			struct bitstream bitstr;
+			i++;
+			bitstream_init( &bitstr, &data[i], 0 );
+			i += Vc1ParseSeqHeader(self, &bitstr);
+			//printf("Sequence header\n");
+
+			if ( data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 && data[i+3] == 0x0E ) {
+				// Entry Point Header
+				struct bitstream bitstr;
+				i += 4;
+				bitstream_init( &bitstr, &data[i], 0 );
+				i += Vc1ParseEntryPointHeader(self, &bitstr);
+				//printf("Entry Point header\n");
+
+				if ( flags & 2 ) // parse codec_data only
+					return 0;
+
+				if ( data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 && data[i+3] == 0x0D )
+					i += 3;
+				else
+					GST_ERROR_OBJECT(self, "No Frame Header after a VC1 Entry Point header!!!");
+			}
+			else
+				GST_ERROR_OBJECT(self, "No Entry Point Header after a VC1 Sequence header!!!");
+		}
+
+		if ( data[i] == 0x0D )
+parse_frame_header:
+		{
+			// Frame Header
+			struct bitstream bitstr;
+			unsigned char ucBFractionVal = 0;
+
+			i++;
+
+			bitstream_init( &bitstr, &data[i], 0 );
+			ucPType = Vc1GetFrameType( self, &bitstr );
+
+			GST_DEBUG_OBJECT(self, "picturetype = %d", ucPType);
+
+			if ( self->prev_frame == NULL ) {
+				// first frame received
+				ucRetVal = cVC1NoBufferDataAvailable;
+			}
+			else {
+				if ( ucPType == 2 && (self->ucPrevFramePicType == 0 || self->ucPrevFramePicType == 6 || self->ucPrevFramePicType == 15) )
+				{
+					int num_frames;
+					// last frame was a reference frame (P-,I- or Skipped-Frame) and current frame is a B-Frame
+					// -> correct the timestamp of the previous reference frame
+					ucBFractionVal = Vc1GetBFractionVal( self, &bitstr );
+
+					num_frames = Vc1GetNrOfFramesFromBFractionVal( ucBFractionVal );
+
+					GST_DEBUG_OBJECT(self, "num_frames = %d", num_frames);
+
+					GST_BUFFER_TIMESTAMP(self->prev_frame) += (1000000000000ULL / self->framerate) * num_frames;
+				}
+				else if ( self->ucPrevFramePicType == 2 )
+				{
+					// last frame was a B-Frame -> correct the timestamp by the duration
+					// of the preceding reference frame
+					GST_BUFFER_TIMESTAMP(self->prev_frame) -= 1000000000000ULL / self->framerate;
+				}
+			}
+			// save the current picture type
+			self->ucPrevFramePicType = ucPType;
+		}
+	}
+	else
+		GST_ERROR_OBJECT(self, "startcodes in VC1 buffer not correctly aligned!");
+
+	return ucRetVal;
+}
