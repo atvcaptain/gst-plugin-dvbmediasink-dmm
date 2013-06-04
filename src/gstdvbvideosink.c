@@ -84,7 +84,7 @@ struct bitstream
 	int avail;
 };
 
-void bitstream_init(struct bitstream *bit, const void *buffer, gboolean wr)
+static void bitstream_init(struct bitstream *bit, const void *buffer, gboolean wr)
 {
 	bit->data = (guint8*) buffer;
 	if (wr) {
@@ -97,7 +97,7 @@ void bitstream_init(struct bitstream *bit, const void *buffer, gboolean wr)
 	}
 }
 
-unsigned long bitstream_get(struct bitstream *bit, int bits)
+static unsigned long bitstream_get(struct bitstream *bit, int bits)
 {
 	unsigned long res=0;
 	while (bits)
@@ -117,7 +117,7 @@ unsigned long bitstream_get(struct bitstream *bit, int bits)
 	return res;
 }
 
-void bitstream_put(struct bitstream *bit, unsigned long val, int bits)
+static void bitstream_put(struct bitstream *bit, unsigned long val, int bits)
 {
 	while (bits)
 	{
