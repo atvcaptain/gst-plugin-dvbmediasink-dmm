@@ -114,10 +114,52 @@ enum
 	LAST_SIGNAL
 };
 
+typedef struct bitstream
+{
+	guint8 *data;
+	guint8 last;
+	int avail;
+	int processed_bits;
+} bitstream_t;
+
+static void bitstream_init(bitstream_t *bit, const void *buffer, gboolean wr)
+{
+	bit->data = (guint8*) buffer;
+	if (wr) {
+		bit->avail = 0;
+		bit->last = 0;
+	}
+	else {
+		bit->processed_bits = 0;
+		bit->avail = 8;
+		bit->last = *bit->data++;
+	}
+}
+
+static unsigned long bitstream_get(bitstream_t *bit, int bits)
+{
+	unsigned long res=0;
+	bit->processed_bits += bits;
+	while (bits)
+	{
+		unsigned int d=bits;
+		if (!bit->avail) {
+			bit->last = *bit->data++;
+			bit->avail = 8;
+		}
+		if (d > bit->avail)
+			d=bit->avail;
+		res<<=d;
+		res|=(bit->last>>(bit->avail-d))&~(-1<<d);
+		bit->avail-=d;
+		bits-=d;
+	}
+	return res;
+}
+
 static guint gst_dvbaudiosink_signals[LAST_SIGNAL] = { 0 };
 
 static guint AdtsSamplingRates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0 };
-
 #define X_RAW_INT(WIDTH, DEPTH) \
 		"audio/x-raw-int, " \
 		"endianess = (int) 1234, " \
@@ -545,6 +587,14 @@ gst_dvbaudiosink_unlock_stop (GstBaseSink * basesink)
 	return TRUE;
 }
 
+gint get_audio_object_type(bitstream_t *bit)
+{
+	gint type = bitstream_get(bit, 5);
+	if (type == 31)
+		type = 32 + bitstream_get(bit, 6);
+	return type;
+}
+
 static gboolean
 gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 {
@@ -583,12 +633,149 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 					const GValue *codec_data = gst_structure_get_value (structure, "codec_data");
 					GST_INFO_OBJECT (self, "MIMETYPE %s version %d (AAC-RAW)", type, mpegversion);
 					if (codec_data) {
-						guint8 *h = GST_BUFFER_DATA(gst_value_get_buffer (codec_data));
-						guint8 obj_type = ((h[0] & 0xC) >> 2) + 1;
-						guint8 rate_idx = ((h[0] & 0x3) << 1) | ((h[1] & 0x80) >> 7);
-						guint8 channels = (h[1] & 0x78) >> 3;
-						GST_INFO_OBJECT (self, "have codec data -> obj_type = %d, rate_idx = %d, channels = %d\n",
-							obj_type, rate_idx, channels);
+						gint rate = 0, ext_rate = -1, is_sbr = 0, is_ps = 0;
+						GstBuffer *b = gst_value_get_buffer (codec_data);
+						guint8 *h = GST_BUFFER_DATA(b);
+						guint l = GST_BUFFER_SIZE(b);
+						guint max_bits = l * 8;
+						gint obj_type, rate_idx, channel_config, ext_obj_type=0, ext_rate_idx=0;
+						bitstream_t bs;
+						bitstream_init (&bs, h, 0);
+
+						obj_type = get_audio_object_type(&bs);
+						GST_INFO_OBJECT (self, "(1)obj_type %d", obj_type);
+						rate_idx = bitstream_get(&bs, 4);
+						GST_INFO_OBJECT (self, "(1)rate_idx %d", rate_idx);
+						if (rate_idx == 0x0f) {
+							rate = bitstream_get(&bs, 24);
+							GST_INFO_OBJECT (self, "(1)rate %d", rate);
+						}
+
+						channel_config = bitstream_get(&bs, 4);
+						if (obj_type == 5 || obj_type == 29) {
+							ext_obj_type = 5;
+							ext_rate_idx = bitstream_get(&bs, 4);
+							GST_INFO_OBJECT (self, "(2)ext_rate_idx %d", ext_rate_idx);
+							if (ext_rate_idx == 0xf) {
+								ext_rate = bitstream_get(&bs, 24);
+								GST_INFO_OBJECT (self, "(2)rate %d", rate);
+							}
+							obj_type = get_audio_object_type(&bs);
+							GST_INFO_OBJECT (self, "(2)obj_type %d", obj_type);
+						}
+
+						/* GASpecificConfig Skip */
+						switch (obj_type) {
+						case 1 ... 3:
+						case 4:
+						case 6 ... 7:
+						case 17:
+						case 19 ... 23:
+						{
+							gint ext_flag = 0;
+
+							bitstream_get(&bs, 1); // fl flag
+
+							if(bitstream_get(&bs, 1)) { // delay flag
+								/* Delay is 14 bits */
+								bitstream_get(&bs, 14);
+							}
+
+							ext_flag = bitstream_get(&bs, 1);
+
+							if (channel_config == 0)
+								GST_ERROR_OBJECT (self, "GASpecificConfig Parser broken! FIXMEE");
+
+							if (obj_type == 6 || obj_type == 20) {
+								bitstream_get(&bs, 3);
+							}
+
+							if (ext_flag) {
+								if (obj_type == 22) {
+									bitstream_get(&bs, 16);
+								}
+								else if (obj_type == 17 || obj_type == 19 || obj_type == 20 || obj_type == 23) {
+									bitstream_get(&bs, 3);
+								}
+								bitstream_get(&bs, 1);
+							}
+							break;
+						}
+						}
+
+						/* ErrorSpecificConfig Skip */
+						switch (obj_type) {
+						case 17:
+						case 19 ... 27:
+							switch (bitstream_get(&bs, 2)) {
+							case 2 ... 3:
+								bitstream_get(&bs, 1);
+							default:
+								break;
+							}
+						default:
+							break;
+						}
+
+						if (ext_obj_type != 5 && max_bits - bs.processed_bits >= 16) {
+							if (bitstream_get(&bs, 11) == 0x2b7) {
+								gint tmp_obj_type = get_audio_object_type(&bs);
+								GST_INFO_OBJECT (self, "(3)temp_obj_type %d", tmp_obj_type);
+								if (tmp_obj_type == 5) {
+									is_sbr = bitstream_get(&bs, 1);
+									if (is_sbr) { // sbr present flag
+										ext_rate_idx = bitstream_get(&bs, 4);
+										GST_INFO_OBJECT (self, "(3)ext_rate_idx %d", ext_rate_idx);
+										if (ext_rate_idx == 0xf) {
+											ext_rate = bitstream_get(&bs, 24);
+											GST_INFO_OBJECT (self, "(3)rate %d", rate);
+										}
+										if (max_bits - bs.processed_bits >= 12) {
+											if (bitstream_get(&bs, 11) == 0x548) {
+												is_ps = bitstream_get(&bs, 1);
+											}
+										}
+										GST_INFO_OBJECT (self, "(3)obj_type %d", obj_type);
+										obj_type = tmp_obj_type;
+									}
+								}
+							}
+						}
+
+						/* Convert rate to rate index */
+						if (rate_idx == 0xf) {
+							rate_idx = 0;
+							do {
+								if (AdtsSamplingRates[rate_idx] == rate)
+									break;
+								++rate_idx;
+							} while (AdtsSamplingRates[rate_idx]);
+							GST_INFO_OBJECT (self, "calculated rate_idx %d for rate %d", rate_idx, rate);
+						}
+
+						if (obj_type == 5) {
+							obj_type = 1; // AAC LC
+//							bypass = 0x0b; // always use AAC+ ADTS yet..
+//							GST_INFO_OBJECT (self, "SBR detected.. use AAC+");
+						}
+						else if (obj_type > 5) {
+//							bypass = 0x0b; // AAC ADTS
+							GST_WARNING_OBJECT (self, "AAC object type %d not usable with AAC ADTS .. force AAC-LC");
+							obj_type = 1; // AAC LC
+						}
+						else {
+							obj_type -= 1;
+//							bypass = 0x08; // AAC ADTS
+//							GST_INFO_OBJECT (self, "AAC object type %d, AAC codec");
+						}
+
+						if (ext_rate != -1)
+							GST_INFO_OBJECT (self, "AAC with codec data ... set ADTS obj_type = %d, ADTS rate_idx = %d(%d), ext rate %d(%d), channel config = %d, mpegversion %d, is_sbr %d, is_ps %d\n",
+								obj_type, rate_idx, AdtsSamplingRates[rate_idx], ext_rate_idx, AdtsSamplingRates[ext_rate_idx], channel_config, mpegversion, is_sbr, is_ps);
+						else
+							GST_INFO_OBJECT (self, "AAC with codec data ... set ADTS obj_type = %d, ADTS rate_idx = %d(%d), channel config = %d, mpegversion %d, is_sbr %d, is_ps %d\n",
+								obj_type, rate_idx, AdtsSamplingRates[rate_idx], channel_config, mpegversion, is_sbr, is_ps);
+
 						/* Sync point over a full byte */
 						self->aac_adts_header[0] = 0xFF;
 						/* Sync point continued over first 4 bits + static 4 bits
@@ -597,13 +784,14 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 						if (mpegversion == 2)
 							self->aac_adts_header[1] |= 8;
 						/* Object type over first 2 bits */
-						self->aac_adts_header[2] = obj_type << 6;
+						self->aac_adts_header[2] = ((obj_type & 3) << 6);
+
 						/* rate index over next 4 bits */
-						self->aac_adts_header[2] |= rate_idx << 2;
-						/* channels over last 2 bits */
-						self->aac_adts_header[2] |= (channels & 0x4) >> 2;
+						self->aac_adts_header[2] |= ((rate_idx & 0xF) << 2);
+						/* channels over last bit */
+						self->aac_adts_header[2] |= ((channel_config & 0x4) >> 2);
 						/* channels continued over next 2 bits + 4 bits at zero */
-						self->aac_adts_header[3] = (channels & 0x3) << 6;
+						self->aac_adts_header[3] = ((channel_config & 0x3) << 6);
 						self->aac_adts_header_valid = TRUE;
 					}
 					else {
@@ -633,11 +821,13 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 								/* channels continued over next 2 bits + 4 bits at zero */
 								self->aac_adts_header[3] = (channels & 0x3) << 6;
 								self->aac_adts_header_valid = TRUE;
+								GST_WARNING_OBJECT(self, "FIXMEE no AAC codec data available... use forced AAC-LC profile and AAC+ ADTS codec!");
 							}
 						}
 					}
 				}
-				bypass = 0x0b; // always use AAC+ ADTS yet..
+				if (bypass == -1)
+					bypass = 0x0b;
 				break;
 			}
 			default:
@@ -1079,7 +1269,7 @@ gst_dvbaudiosink_render (GstBaseSink * sink, GstBuffer * buffer)
 	pes_header[3] = 0xC0;
 
 	if (self->aac_adts_header_valid)
-		size += 7;
+		size += 7; // ADTS Header length
 	else if (self->temp_buffer)
 		size = self->block_align + self->temp_offset;
 
@@ -1133,7 +1323,7 @@ next_chunk:
 		/* frame size over last 2 bits */
 		self->aac_adts_header[3] |= (size & 0x1800) >> 11;
 		/* frame size continued over full byte */
-		self->aac_adts_header[4] = (size & 0x1FF8) >> 3;
+		self->aac_adts_header[4] = (size & 0x7F8) >> 3;
 		/* frame size continued first 3 bits */
 		self->aac_adts_header[5] = (size & 7) << 5;
 		/* buffer fullness (0x7FF for VBR) over 5 last bits */
