@@ -605,6 +605,11 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 
 	self->skip = 0;
 	self->block_align = 0;
+	self->aac_adts_header_valid = FALSE;
+	if (self->temp_buffer) {
+		gst_buffer_unref(self->temp_buffer);
+		self->temp_buffer = NULL;
+	}
 
 	if (!strcmp(type, "audio/mpeg")) {
 		gint mpegversion;
