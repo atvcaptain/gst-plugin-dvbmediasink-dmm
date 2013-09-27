@@ -202,7 +202,9 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-dts; "
 		"audio/x-private1-dts; "
 		"audio/x-private1-lpcm; "
-		"audio/x-wma")
+		"audio/x-wma;"
+		"audio/x-eac3;"
+		"audio/x-private-eac3")
 );
 
 static GstStaticPadTemplate sink_factory_broadcom =
@@ -305,13 +307,34 @@ gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
 //	GstDVBAudioSink *self = GST_DVBAUDIOSINK (basesink);
 //	gchar *strcaps;
 	GstCaps *caps;
+	static int eac3_support;
 
-	if (hwtype == DM8000 && hwtemplate == &sink_factory_broadcom_dts) {
+	if (!eac3_support) {
+		int fd = open("/proc/stb/audio/ac3plus", O_RDONLY);
+		if (fd >= 0) {
+			eac3_support = 1;
+			close(fd);
+		}
+		else
+			eac3_support = -1;
+	}
+
+	int eac3_pos = 12;
+
+	if (hwtype == DM8000) {
 		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
 		gst_caps_remove_structure(caps, 11); // remove WMA!!
+		--eac3_pos;
 	}
 	else
 		caps = gst_static_caps_get(&hwtemplate->static_caps);
+
+	if (eac3_support < 0) {
+		if (eac3_pos == 12)
+			caps = gst_caps_copy(&hwtemplate->static_caps.caps);
+		gst_caps_remove_structure(caps, eac3_pos); // remove x-eac3
+		gst_caps_remove_structure(caps, eac3_pos); // remove x-private-eac3
+	}
 
 //	strcaps = gst_caps_to_string(caps);
 //	GST_INFO_OBJECT (self, "dynamic caps for model %d '%s'", hwtype, gst_caps_to_string(caps));
@@ -345,6 +368,7 @@ gst_dvbaudiosink_acceptcaps (GstPad * pad, GstCaps * caps)
 
 		if (!strcmp(type, "audio/mpeg") ||
 		    !strcmp(type, "audio/x-ac3") ||
+		    !strcmp(type, "audio/x-eac3") ||
 //		    !strcmp(type, "audio/x-private1-ac3") ||
 //		    !strcmp(type, "audio/x-private1-lpcm") ||
 //		    !strcmp(type, "audio/x-wma") ||
@@ -852,6 +876,15 @@ gst_dvbaudiosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 	else if (!strcmp(type, "audio/x-private1-ac3")) {
 		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
 		bypass = 0;
+		self->skip = 2;
+	}
+	else if (!strcmp(type, "audio/x-eac3")) {
+		GST_INFO_OBJECT (self, "MIMETYPE %s",type);
+		bypass = 7;
+	}
+	else if (!strcmp(type, "audio/x-private1-eac3")) {
+		GST_INFO_OBJECT (self, "MIMETYPE %s (DVD Audio - 2 byte skipping)",type);
+		bypass = 7;
 		self->skip = 2;
 	}
 	else if (!strcmp(type, "audio/x-private1-lpcm")) {
