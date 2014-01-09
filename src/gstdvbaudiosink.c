@@ -569,7 +569,7 @@ gst_dvbaudiosink_get_property (GObject * object, guint prop_id, GValue * value, 
 static gint64
 gst_dvbaudiosink_get_decoder_time (GstDVBAudioSink *self)
 {
-	if (self->bypass != -1) {
+	if (self->bypass != -1 && self->fd > -1) {
 		gint64 cur = 0;
 		static gint64 last_pos = 0;
 

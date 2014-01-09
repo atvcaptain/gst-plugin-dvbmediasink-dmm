@@ -476,7 +476,7 @@ static void gst_dvbvideosink_dispose (GObject * object)
 
 static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self)
 {
-	if (self->dec_running) {
+	if (self->dec_running && self->fd > -1) {
 		gint64 cur = 0;
 		static gint64 last_pos = 0;
 
@@ -584,6 +584,9 @@ gst_dvbvideosink_event (GstBaseSink * sink, GstEvent * event)
 	{
 		struct pollfd pfd[2];
 		int retval;
+
+		if (self->fd < 0)
+			break;
 
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
