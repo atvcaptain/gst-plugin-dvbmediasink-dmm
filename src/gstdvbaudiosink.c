@@ -1081,6 +1081,9 @@ gst_dvbaudiosink_event (GstBaseSink * sink, GstEvent * event)
 		struct pollfd pfd[2];
 		int retval;
 
+		if (self->fd < 0)
+			break;
+
 		pfd[0].fd = READ_SOCKET(self);
 		pfd[0].events = POLLIN;
 		pfd[1].fd = self->fd;
