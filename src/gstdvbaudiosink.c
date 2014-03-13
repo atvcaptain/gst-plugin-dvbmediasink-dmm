@@ -181,10 +181,6 @@ GST_STATIC_PAD_TEMPLATE (
 		"audio/x-private1-ac3")
 );
 
-/* take care when you add or remove caps here!!!
- * position 11 must be WMA !!!
- * see gst_dvbaudiosink_get_caps
- */
 static GstStaticPadTemplate sink_factory_broadcom_dts =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -319,22 +315,13 @@ gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
 			eac3_support = -1;
 	}
 
-	int eac3_pos = 12;
-
-	if (hwtype == DM8000) {
+	if (eac3_support < 0) {
 		caps = gst_caps_copy(&hwtemplate->static_caps.caps);
-		gst_caps_remove_structure(caps, 11); // remove WMA!!
-		--eac3_pos;
+		gst_caps_remove_structure(caps, 12); // remove x-eac3
+		gst_caps_remove_structure(caps, 12); // remove x-private-eac3
 	}
 	else
 		caps = gst_static_caps_get(&hwtemplate->static_caps);
-
-	if (eac3_support < 0) {
-		if (eac3_pos == 12)
-			caps = gst_caps_copy(&hwtemplate->static_caps.caps);
-		gst_caps_remove_structure(caps, eac3_pos); // remove x-eac3
-		gst_caps_remove_structure(caps, eac3_pos); // remove x-private-eac3
-	}
 
 //	strcaps = gst_caps_to_string(caps);
 //	GST_INFO_OBJECT (self, "dynamic caps for model %d '%s'", hwtype, gst_caps_to_string(caps));

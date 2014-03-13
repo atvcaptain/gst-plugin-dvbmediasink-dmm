@@ -208,7 +208,10 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/x-xvid, "
 		MPEG4V2_LIMITED_CAPS "; "
 		"video/x-3ivx, "
-		MPEG4V2_LIMITED_CAPS "; ")
+		MPEG4V2_LIMITED_CAPS "; "
+		"video/x-wmv, "
+		"wmvversion = (int) 3, "
+		COMMON_VIDEO_CAPS "; ")
 );
 
 static GstStaticPadTemplate sink_factory_bcm7405 =
