@@ -1512,7 +1512,7 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		    gst_structure_get_fourcc (structure, "fourcc", &fourcc))
 		{
 			gint width, height;
-			if (GST_MAKE_FOURCC('W', 'V', 'C', '1') == fourcc)
+			if (GST_MAKE_FOURCC('W', 'V', 'C', '1') == fourcc || GST_MAKE_FOURCC('W', 'M', 'V', 'A') == fourcc)
 			{
 				streamtype = 16;  // VC-1
 				self->codec_type = CT_VC1;
