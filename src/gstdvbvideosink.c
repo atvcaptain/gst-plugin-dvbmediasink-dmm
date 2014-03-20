@@ -1740,18 +1740,6 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 		fclose(f);
 	}
 
-	f = fopen("/proc/stb/vmpeg/0/sar_x", "w");
-	if (f) {
-		fputc('0', f);
-		fclose(f);
-	}
-
-	f = fopen("/proc/stb/vmpeg/0/sar_y", "w");
-	if (f) {
-		fputc('0', f);
-		fclose(f);
-	}
-
 	close (READ_SOCKET (self));
 	close (WRITE_SOCKET (self));
 	READ_SOCKET (self) = -1;
