@@ -1600,6 +1600,25 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		else if (self->framerate == -1)
 			GST_INFO_OBJECT(self, "no framerate given!");
 
+		if (gst_structure_get_fraction (structure, "pixel-aspect-ratio", &numerator, &denominator)) {
+			if (numerator > 1 || denominator > 1) {
+				FILE *f = fopen("/proc/stb/vmpeg/0/sar_x", "w");
+				if (f) {
+					GST_INFO_OBJECT(self, "set SAR_X to %d", numerator);
+					fprintf(f, "%d", numerator);
+					fclose(f);
+				}
+				f = fopen("/proc/stb/vmpeg/0/sar_y", "w");
+				if (f) {
+					GST_INFO_OBJECT(self, "set SAR_Y to %d", denominator);
+					fprintf(f, "%d", denominator);
+					fclose(f);
+				}
+			}
+			else
+				GST_INFO_OBJECT(self, "ignore container pixel-aspect-ratio %d/%d", numerator, denominator);
+		}
+
 		if (self->dec_running) {
 			ioctl(self->fd, VIDEO_STOP, 0);
 			self->dec_running = FALSE;
@@ -1718,6 +1737,18 @@ gst_dvbvideosink_stop (GstBaseSink * basesink)
 
 	if (f) {
 		fputs(self->saved_fallback_framerate, f);
+		fclose(f);
+	}
+
+	f = fopen("/proc/stb/vmpeg/0/sar_x", "w");
+	if (f) {
+		fputc('0', f);
+		fclose(f);
+	}
+
+	f = fopen("/proc/stb/vmpeg/0/sar_y", "w");
+	if (f) {
+		fputc('0', f);
 		fclose(f);
 	}
 
