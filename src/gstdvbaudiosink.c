@@ -306,13 +306,17 @@ gst_dvbaudiosink_get_caps (GstBaseSink *basesink)
 	static int eac3_support;
 
 	if (!eac3_support) {
-		int fd = open("/proc/stb/audio/ac3plus", O_RDONLY);
-		if (fd >= 0) {
+		if (hwtemplate != &sink_factory_broadcom_dts)
 			eac3_support = 1;
-			close(fd);
+		else {
+			int fd = open("/proc/stb/audio/ac3plus", O_RDONLY);
+			if (fd >= 0) {
+				eac3_support = 1;
+				close(fd);
+			}
+			else
+				eac3_support = -1;
 		}
-		else
-			eac3_support = -1;
 	}
 
 	if (eac3_support < 0) {
