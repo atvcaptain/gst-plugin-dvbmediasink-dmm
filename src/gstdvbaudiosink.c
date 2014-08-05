@@ -276,7 +276,7 @@ gst_dvbaudiosink_base_init (gpointer klass)
 				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM7020HD set broadcom dts caps", string);
 			}
-			else if ( !strncasecmp(string, "DM7080", 8) ) {
+			else if ( !strncasecmp(string, "DM7080", 6) ) {
 				hwtype = DM7080;
 				hwtemplate = &sink_factory_broadcom_dts;
 				GST_INFO ("model is DM7080 set broadcom dts caps", string);
