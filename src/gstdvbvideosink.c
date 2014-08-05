@@ -286,7 +286,7 @@ static void gst_dvbvideosink_dispose (GObject * object);
 static GstStateChangeReturn gst_dvbvideosink_change_state (GstElement * element, GstStateChange transition);
 static gint64 gst_dvbvideosink_get_decoder_time (GstDVBVideoSink *self);
 
-typedef enum { DM7025, DM800, DM8000, DM500HD, DM800SE, DM7020HD } hardware_type_t;
+typedef enum { DM7025, DM800, DM8000, DM500HD, DM800SE, DM7020HD, DM7080 } hardware_type_t;
 
 static hardware_type_t hwtype;
 static GstStaticPadTemplate *hwtemplate;
@@ -325,6 +325,10 @@ gst_dvbvideosink_base_init (gpointer klass)
 				hwtype = DM7020HD;
 				hwtemplate = &sink_factory_bcm7405;
 				GST_INFO ("model is DM7020HD... set bcm7405 caps");
+			} else if ( !strncasecmp(string, "DM7020HD", 8) ) {
+				hwtype = DM7080;
+				hwtemplate = &sink_factory_bcm7405;
+				GST_INFO ("model is DM7080... set bcm7405 caps");
 			} else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
 				hwtemplate = &sink_factory_bcm7400;
