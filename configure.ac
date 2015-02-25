@@ -1,4 +1,4 @@
-AC_INIT
+AC_INIT([dvbmediasink],[0.10],[enigma2-devel@lists.elitedvb.net])
 AC_CONFIG_MACRO_DIR([m4])
 
 dnl versions of gstreamer and plugins-base
@@ -18,7 +18,7 @@ AS_VERSION(gst-plugin, GST_PLUGIN_VERSION, 0, 10, 0, 1,
 dnl AM_MAINTAINER_MODE provides the option to enable maintainer mode
 AM_MAINTAINER_MODE
 
-AM_INIT_AUTOMAKE($PACKAGE, $VERSION)
+AM_INIT_AUTOMAKE([foreign])
 
 dnl make aclocal work in maintainer mode
 AC_SUBST(ACLOCAL_AMFLAGS, "-I m4")
