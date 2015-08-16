@@ -241,6 +241,41 @@ GST_STATIC_PAD_TEMPLATE (
 		COMMON_VIDEO_CAPS "; ")
 );
 
+static GstStaticPadTemplate sink_factory_bcm7435 =
+GST_STATIC_PAD_TEMPLATE (
+	"sink",
+	GST_PAD_SINK,
+	GST_PAD_ALWAYS,
+	GST_STATIC_CAPS (
+		"video/mpeg, "
+		"mpegversion = (int) { 1, 2, 4 }, "
+		"systemstream = (boolean) false, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-msmpeg, "
+		COMMON_VIDEO_CAPS ", msmpegversion = (int) 43; "
+		"video/x-h264, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-h263, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-divx, "
+		COMMON_VIDEO_CAPS ", divxversion = (int) [ 3, 6 ]; "
+		"video/x-xvid, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-3ivx, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-wmv, "
+		"wmvversion = (int) 3, "
+		COMMON_VIDEO_CAPS "; "
+//		"video/x-flash-video, "
+//		COMMON_VIDEO_CAPS "; "
+//		"video/x-vp6, "
+//		COMMON_VIDEO_CAPS "; "
+//		"video/x-vp6-flash, "
+//		COMMON_VIDEO_CAPS "; "
+		"video/x-vp8, "
+		COMMON_VIDEO_CAPS "; ")
+);
+
 static GstStaticPadTemplate sink_factory_bcm7401 =
 GST_STATIC_PAD_TEMPLATE (
 	"sink",
@@ -327,12 +362,12 @@ gst_dvbvideosink_base_init (gpointer klass)
 				GST_INFO ("model is DM7020HD... set bcm7405 caps");
 			} else if ( !strncasecmp(string, "DM7080", 6) ) {
 				hwtype = DM7080;
-				hwtemplate = &sink_factory_bcm7405;
-				GST_INFO ("model is DM7080... set bcm7405 caps");
+				hwtemplate = &sink_factory_bcm7435;
+				GST_INFO ("model is DM7080... set bcm7435 caps");
 			} else if ( !strncasecmp(string, "DM820", 5) ) {
 				hwtype = DM820;
-				hwtemplate = &sink_factory_bcm7405;
-				GST_INFO ("model is DM820 set bcm7405 caps");
+				hwtemplate = &sink_factory_bcm7435;
+				GST_INFO ("model is DM820 set bcm7435 caps");
 			} else if ( !strncasecmp(string, "DM8000", 6) ) {
 				hwtype = DM8000;
 				hwtemplate = &sink_factory_bcm7400;
@@ -1047,6 +1082,21 @@ gst_dvbvideosink_render (GstBaseSink * sink, GstBuffer * buffer)
 				}
 			}
 		}
+		else if (self->codec_type == CT_VP8 || self->codec_type == CT_VP6 || self->codec_type == CT_SPARK) {
+			uint32_t len = data_len + 4 + 6;
+			memcpy(pes_header+pes_header_len, "BCMV", 4);
+			pes_header_len += 4;
+			if (self->codec_type == CT_VP6)
+				++len;
+			pes_header[pes_header_len++] = (len & 0xFF000000) >> 24;
+			pes_header[pes_header_len++] = (len & 0x00FF0000) >> 16;
+			pes_header[pes_header_len++] = (len & 0x0000FF00) >> 8;
+			pes_header[pes_header_len++] = (len & 0x000000FF) >> 0;
+			pes_header[pes_header_len++] = 0;
+			pes_header[pes_header_len++] = 0;
+			if (self->codec_type == CT_VP6)
+				pes_header[pes_header_len++] = 0;
+		}
 	}
 	else {
 //		printf("no timestamp!\n");
@@ -1579,6 +1629,18 @@ gst_dvbvideosink_set_caps (GstBaseSink * basesink, GstCaps * caps)
 		}
 		else
 			GST_ERROR_OBJECT(self, "no WMV fourcc given!");
+	} else if (!strcmp (mimetype, "video/x-vp6") || !strcmp (mimetype, "video/x-vp6-flash")) {
+		self->codec_type = CT_VP6;
+		streamtype = 18;
+		GST_INFO_OBJECT (self, "MIMETYPE %s -> VIDEO_SET_STREAMTYPE, 18", mimetype);
+	} else if (!strcmp (mimetype, "video/x-vp8")) {
+		self->codec_type = CT_VP8;
+		streamtype = 20;
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-vp8 -> VIDEO_SET_STREAMTYPE, 20");
+	} else if (!strcmp (mimetype, "video/x-flash-video")) {
+		self->codec_type = CT_SPARK;
+		streamtype = 21;
+		GST_INFO_OBJECT (self, "MIMETYPE video/x-flash-video -> VIDEO_SET_STREAMTYPE, 21");
 	}
 	if (streamtype != -1) {
 		gint numerator, denominator;
