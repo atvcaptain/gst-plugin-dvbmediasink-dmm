@@ -266,12 +266,12 @@ GST_STATIC_PAD_TEMPLATE (
 		"video/x-wmv, "
 		"wmvversion = (int) 3, "
 		COMMON_VIDEO_CAPS "; "
-//		"video/x-flash-video, "
-//		COMMON_VIDEO_CAPS "; "
-//		"video/x-vp6, "
-//		COMMON_VIDEO_CAPS "; "
-//		"video/x-vp6-flash, "
-//		COMMON_VIDEO_CAPS "; "
+		"video/x-flash-video, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-vp6, "
+		COMMON_VIDEO_CAPS "; "
+		"video/x-vp6-flash, "
+		COMMON_VIDEO_CAPS "; "
 		"video/x-vp8, "
 		COMMON_VIDEO_CAPS "; ")
 );
